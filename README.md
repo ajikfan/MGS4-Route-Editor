@@ -1,4 +1,6 @@
-# Éditeur de routes MGS4
+# MGS4 Route Editor
+
+Éditeur de routes pour Metal Gear Solid 4.
 
 Application à part (indépendante de MGS4-Trainer) pour voir une zone de
 Metal Gear Solid 4 de dessus et y tracer des routes.

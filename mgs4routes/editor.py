@@ -207,7 +207,7 @@ def _swatch(color: str) -> QIcon:
 class RouteEditor(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Éditeur de routes — MGS4")
+        self.setWindowTitle("MGS4 Route Editor")
         self.resize(1440, 900)
         self.link = GameLink()
         self.files = None
@@ -264,7 +264,7 @@ class RouteEditor(QMainWindow):
         row = QHBoxLayout(bar)
         row.setContentsMargins(16, 0, 16, 0)
         row.setSpacing(10)
-        title = QLabel("Éditeur de routes")
+        title = QLabel("MGS4 Route Editor")
         title.setObjectName("title")
         row.addWidget(title)
         self.zone_combo = QComboBox()
