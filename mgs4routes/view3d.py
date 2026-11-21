@@ -138,6 +138,31 @@ def wall_meshes(walls, ground: float | None = None, cut: float | None = None) ->
     return tri.reshape(-1, 7), edges.reshape(-1, 7)
 
 
+def decor_mesh(tris) -> np.ndarray:
+    """Triangles du decor eclaires (normale de chaque face), un peu plus clairs en hauteur."""
+    if tris is None or not len(tris):
+        return np.zeros((0, 7), np.float32)
+    t = np.asarray(tris, dtype=np.float64) / 1000.0
+    t[:, :, 2] *= -1.0  # Z inverse (nord en haut)
+    n = np.cross(t[:, 1] - t[:, 0], t[:, 2] - t[:, 0])
+    n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-9)
+    light = np.array((0.35, 0.85, 0.40))
+    light /= np.linalg.norm(light)
+    lit = 0.45 + 0.55 * np.abs(n @ light)
+    y = t[:, :, 1].mean(axis=1)
+    h = np.clip((y - np.percentile(y, 5)) / 15.0, 0.0, 1.0)
+    up = np.abs(n[:, 1]) > 0.7  # sols, dessus : teinte a part des parois
+    ground = np.array((0.33, 0.39, 0.47))
+    wall = np.array((0.66, 0.69, 0.74))
+    base = np.where(up[:, None], ground[None, :], wall[None, :])
+    col = (lit * (0.85 + 0.3 * h))[:, None] * base
+    out = np.zeros((len(t), 3, 7), np.float32)
+    out[:, :, 0:3] = t
+    out[:, :, 3:6] = np.clip(col, 0, 1)[:, None, :]
+    out[:, :, 6] = 1.0
+    return out.reshape(-1, 7)
+
+
 def floor_mesh(floors) -> np.ndarray:
     """Triangles des sols (polygones convexes en eventail), teintes selon la hauteur."""
     if not floors:
@@ -168,6 +193,7 @@ class View3D(QOpenGLWidget):
         self.setMinimumSize(200, 200)
         self.gl = None
         self.program = None
+        self.decor = Mesh(GL_TRIANGLES)
         self.floors = Mesh(GL_TRIANGLES)
         self.walls = Mesh(GL_TRIANGLES)
         self.wall_edges = Mesh(GL_LINES)
@@ -189,6 +215,11 @@ class View3D(QOpenGLWidget):
     def mouseDoubleClickEvent(self, event):
         self.pitch = math.radians(89)
         self.yaw = 0.0
+        self.update()
+
+    def set_decor(self, tris):
+        """tris : (N, 3, 3) en mm (formes de collision)."""
+        self.decor.set(decor_mesh(tris))
         self.update()
 
     def set_world(self, floors, walls, ground: float):
@@ -286,6 +317,7 @@ class View3D(QOpenGLWidget):
         self.grid.draw(gl, self.program)
         gl.glEnable(GL_POLYGON_OFFSET_FILL)
         gl.glPolygonOffset(2.0, 2.0)  # sols sous les lignes des routes
+        self.decor.draw(gl, self.program)
         self.floors.draw(gl, self.program)
         gl.glPolygonOffset(1.0, 1.0)  # aretes au-dessus des faces
         self.walls.draw(gl, self.program)

@@ -19,7 +19,7 @@ import struct
 import sys
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
+from PySide6.QtGui import QImage, QBrush, QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QAbstractSpinBox, QApplication, QButtonGroup, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFrame,
     QGraphicsEllipseItem, QGraphicsItem, QGraphicsPathItem, QGraphicsPolygonItem, QGraphicsScene,
@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 
 from mgs4routes import geom as geomlib
 from mgs4routes.game import NAV_TYPE, GameLink
+from mgs4routes.collision import MeshCache, clip_below
 from mgs4routes.nav import CellCache, NavIndex
 from mgs4routes.view3d import View3D
 from mgs4routes.vpak import STAGE_ARCHIVES, StageFiles
@@ -41,6 +42,9 @@ SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 ROUTES_DIR = os.path.join(DATA_DIR, "routes")
 NAV_INDEX_FILE = os.path.join(DATA_DIR, "cache", "nv2_index.json")
 CELL_CACHE_DIR = os.path.join(DATA_DIR, "cache", "cells")
+MESH_CACHE_DIR = os.path.join(DATA_DIR, "cache", "meshes")
+DECOR_CUT = 3000  # mm au-dessus du niveau affiche : le decor plus haut est coupe (toits)
+DECOR_PIXELS, DECOR_MM_PER_PIXEL = 6000, 50  # image du decor en 2D : taille maximale, finesse
 ACTION_NAMES_FILE = os.path.join(DATA_DIR, "action_names.json")
 ZONE_BLOCKS_FILE = os.path.join(DATA_DIR, "zone_blocks.json")  # blocs vus en jeu : zone -> progression -> ids
 STEAM_GUESSES = (
@@ -65,9 +69,14 @@ POINT_FIELDS = {"flags": (0x0C, "<I"), "action": (0x1C, "<H"), "move": (0x1E, "<
 # Actions verifiees en jeu (trainer, 2026-11-07) ; les autres codes sont a
 # decouvrir : on peut les nommer dans l'editeur (action_names.json).
 KNOWN_ACTIONS = {1: "Passage", 3: "Poste debout", 4: "Poste accroupi", 25: "Retour en réserve"}
-# Allures relevees en jeu (trainer, 2026-11-07)
-KNOWN_MOVES = {0: "Marche lente", 1: "Course", 2: "Marche/course", 3: "Marche", 4: "Course",
-               5: "Accroupi", 6: "Marche en visant", 12: "Marche"}
+# Allures relevees en jeu (utilisateur, 2026-11-21)
+KNOWN_MOVES = {0: "Marche lente", 1: "Marche lente", 2: "Marche", 3: "Marche soutenue", 4: "Course",
+               5: "Course accroupie", 6: "Marche accroupie en visant une cible", 12: "Course",
+               19: "Marche accroupie en visant droit devant",
+               22: "Marche à reculons accroupie en visant une cible",
+               23: "Marche soutenue accroupie en visant droit devant",
+               24: "Marche soutenue accroupie en visant une cible",
+               25: "Marche à reculons soutenue accroupie en visant une cible"}
 WAIT_FOREVER = 0xFFFF
 MONO = "Consolas"
 # premiers caracteres du code de zone -> acte et region (affiche a cote du code)
@@ -472,7 +481,7 @@ class RouteEditor(QMainWindow):
         self.snake = None
         self.game_location = None
         self._building = False
-        self._game_items = {"grid": [], "floor": [], "walls": [], "passages": [], "routes": [], "markers": [], "objects": []}
+        self._game_items = {"grid": [], "decor": [], "floor": [], "walls": [], "passages": [], "routes": [], "markers": [], "objects": []}
         self._route_items = []
         self._highlight = None
         self._pick_item = None
@@ -492,6 +501,7 @@ class RouteEditor(QMainWindow):
         self.live_state = {}          # identifiant -> octets ecrits (attendus en memoire)
         self._geom_zone_of_backup = None
         self.cells = []               # cellules praticables des blocs de la zone
+        self.block_paths = []         # .nv2 des blocs de la zone (meme numero que leur .geom)
         self.level = 0.0              # hauteur du sol affiche (mm)
         self.walls_3d_dirty = True
         self._3d_pending = False
@@ -665,7 +675,8 @@ class RouteEditor(QMainWindow):
         lay.setSpacing(8)
         lay.addWidget(_section("Calques"))
         self.layer_checks = {}
-        for key, text in (("soldiers", "Soldats (en direct)"), ("floor", "Sol praticable"),
+        for key, text in (("soldiers", "Soldats (en direct)"), ("decor", "Décor (formes de collision)"),
+                          ("floor", "Sol praticable"),
                           ("walls", "Murs et obstacles"), ("passages", "Passages entre cellules"),
                           ("grid", "Grille de la zone"), ("routes", "Routes du jeu"),
                           ("markers", "Repères"), ("objects", "Objets de collision")):
@@ -894,6 +905,29 @@ class RouteEditor(QMainWindow):
         grid.addWidget(self.game_wait, 1, 0)
         grid.addWidget(self.game_angle, 1, 1)
         col.addLayout(grid)
+        col.addSpacing(4)
+        head = QHBoxLayout()
+        head.addWidget(_field("Regard (point visé)"))
+        head.addStretch(1)
+        self.look_snake_button = QPushButton("Regard = Snake")
+        self.look_snake_button.setStyleSheet("padding: 2px 8px; font-size: 11px;")
+        self.look_snake_button.setToolTip("Place le point visé sur la position actuelle de Snake")
+        self.look_snake_button.clicked.connect(self.look_at_snake)
+        head.addWidget(self.look_snake_button)
+        col.addLayout(head)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(8)
+        self.game_look = {}
+        for i, key in enumerate("xyz"):
+            spin = QDoubleSpinBox()
+            spin.setRange(-1e7, 1e7)
+            spin.setDecimals(0)
+            spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+            spin.setToolTip(("X", "Hauteur", "Z")[i] + " du point visé (mm)")
+            spin.editingFinished.connect(self.edit_game_look)
+            grid.addWidget(spin, 0, i)
+            self.game_look[key] = spin
+        col.addLayout(grid)
         self.game_forever = QCheckBox("Attente sans fin")
         self.game_forever.clicked.connect(
             lambda on: self.edit_game_field("wait", WAIT_FOREVER if on else 0))
@@ -966,6 +1000,24 @@ class RouteEditor(QMainWindow):
             setattr(point, key, value)
         self.show_point()
 
+    def edit_game_look(self, position=None):
+        """Ecrit le point vise (+0x10) du point choisi d'une route du jeu."""
+        if not (self.live and self.game_pick is not None):
+            return
+        r, i = self.game_pick
+        point = self.geom.routes[r].points[i]
+        look = tuple(float(v) for v in position) if position else tuple(self.game_look[k].value() for k in "xyz")
+        if max(abs(a - b) for a, b in zip(look, point.look)) < 1:
+            return
+        if self.write_game_bytes(r, i, 0x10, struct.pack("<3f", *look)):
+            point.look = look
+            self.redraw_game_route(r)
+        self.show_point()
+
+    def look_at_snake(self):
+        if self.snake:
+            self.edit_game_look(self.snake)
+
     # -------------------------------------------------- passer d'un point a l'autre
     def step_point(self, delta: int):
         if self.game_pick is not None and self.selected == -1:
@@ -1015,6 +1067,7 @@ class RouteEditor(QMainWindow):
             self.zone_combo.addItem(f"{code}   {ACT_NAMES.get(code[:3], '')}", code)
         self.nav = NavIndex(self.files, NAV_INDEX_FILE)
         self.cell_cache = CellCache(self.files, CELL_CACHE_DIR)
+        self.mesh_cache = MeshCache(self.files, MESH_CACHE_DIR)
 
         def progress(i, n):
             if i % 10 == 0:
@@ -1048,7 +1101,7 @@ class RouteEditor(QMainWindow):
         self._soldier_ring = None
         self.selected_soldier = None
         self._handle = None
-        self._game_items = {"grid": [], "floor": [], "walls": [], "passages": [], "routes": [], "markers": [], "objects": []}
+        self._game_items = {"grid": [], "decor": [], "floor": [], "walls": [], "passages": [], "routes": [], "markers": [], "objects": []}
         self._route_items = []
         self._highlight = None
         self._pick_item = None
@@ -1181,7 +1234,8 @@ class RouteEditor(QMainWindow):
             # coupe comme un plan d'architecte : rien au-dessus du niveau affiche + 2 m
             cut = [c for c in self.cells if c["floor"] <= self.level + LEVEL_ABOVE]
             floors, walls = [], []
-            for c in cut:
+            decor = self.layer_checks["decor"].isChecked()
+            for c in (cut if not decor else []):  # avec le decor, sols et murs de navigation font doublon
                 if c.get("kind") == "obstacle":  # bloc : dessus a la hauteur libre, cotes en murs
                     top = min(c.get("clearance", WALL_HEIGHT_3D), WALL_HEIGHT_3D)
                     if self.layer_checks["floor"].isChecked():
@@ -1195,6 +1249,7 @@ class RouteEditor(QMainWindow):
                 if self.layer_checks["walls"].isChecked():
                     walls += [(*w, c["floor"], WALL_HEIGHT_3D) for w in c["walls"]]
             self.view3d.set_world(floors, walls, self.level)
+            self.view3d.set_decor(self.decor_triangles() if self.layer_checks["decor"].isChecked() else None)
             self.walls_3d_dirty = False
         polylines, markers = [], []
         if self.layer_checks["routes"].isChecked():
@@ -1450,6 +1505,7 @@ class RouteEditor(QMainWindow):
     def draw_walls(self):
         """Sol et murs a partir des cellules de navigation (voir nav.cells)."""
         paths, source = self.zone_blocks()
+        self.block_paths = paths
         self.cells = [cell for path in paths for cell in self.cell_cache.get(path)]
         self._blocks_text = (f"Carte : {len(paths)} bloc(s), {len(self.cells)} cellules · {source}"
                              + ("\n" + ", ".join(p.split("/")[-1][:8] for p in paths[:6]) + ("…" if len(paths) > 6 else "")
@@ -1509,6 +1565,7 @@ class RouteEditor(QMainWindow):
             item.setZValue(z)
             item.setVisible(self.layer_checks[key].isChecked())
             self._game_items[key].append(item)
+        self.draw_decor_2d()
         self.blocks_label.setText(f"{self._blocks_text}\nNiveau {self.level / 1000:.1f} m : "
                                   f"{len(here)} cellules, {count} murs")
         self.walls_3d_dirty = True
@@ -1526,6 +1583,61 @@ class RouteEditor(QMainWindow):
             self.level_spin.blockSignals(False)
             if redraw:
                 self.draw_level()
+
+    def draw_decor_2d(self):
+        """Decor vu de dessus : image ombree (eclairage + hauteur), coupee au niveau."""
+        import numpy as np
+        for item in self._game_items["decor"]:
+            self.scene.removeItem(item)
+        self._game_items["decor"] = []
+        tris = self.decor_triangles()
+        if tris is None or not len(tris):
+            return
+        x0, x1 = float(tris[:, :, 0].min()), float(tris[:, :, 0].max())
+        z0, z1 = float(tris[:, :, 2].min()), float(tris[:, :, 2].max())
+        scale = min(DECOR_PIXELS / max(x1 - x0, z1 - z0), 1 / DECOR_MM_PER_PIXEL)
+        width, height = int((x1 - x0) * scale) + 2, int((z1 - z0) * scale) + 2
+        image = QImage(width, height, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(Qt.GlobalColor.transparent)
+        normal = np.cross(tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0])
+        normal /= np.maximum(np.linalg.norm(normal, axis=1, keepdims=True), 1e-9)
+        light = np.array((0.35, 0.85, -0.40))
+        light /= np.linalg.norm(light)
+        lit = 0.4 + 0.6 * np.abs(normal @ light)
+        top = tris[:, :, 1].max(axis=1)
+        rel = np.clip((top - (self.level - LEVEL_BELOW)) / (LEVEL_ABOVE + DECOR_CUT + LEVEL_BELOW), 0, 1)
+        order = np.argsort(top)  # du plus bas au plus haut : le dessus recouvre
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        painter.setPen(Qt.PenStyle.NoPen)
+        for k in order:
+            if abs(normal[k, 1]) < 0.05:
+                continue  # paroi verticale : invisible de dessus
+            v = int((30 + 175 * rel[k]) * (0.78 + 0.22 * lit[k]))  # surtout la hauteur
+            painter.setBrush(QColor(max(v - 6, 0), v, min(v + 16, 255)))
+            t = tris[k]
+            painter.drawPolygon(QPolygonF([QPointF((p[0] - x0) * scale, (z1 - p[2]) * scale) for p in t]))
+        painter.end()
+        item = self.scene.addPixmap(QPixmap.fromImage(image))
+        item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
+        item.setScale(1 / scale)
+        item.setPos(to_scene(x0, z1))
+        item.setZValue(-11.5)
+        item.setOpacity(0.7)
+        item.setVisible(self.layer_checks["decor"].isChecked())
+        self._game_items["decor"].append(item)
+
+    def decor_triangles(self):
+        """Formes de collision des blocs de la zone, coupees au-dessus du niveau."""
+        import numpy as np
+        parts = []
+        for path in self.block_paths:
+            geom = path[:-4] + ".geom"
+            if geom in self.files.entries:
+                parts.append(self.mesh_cache.get(geom))
+        if not parts:
+            return None
+        return clip_below(np.concatenate(parts), self.level + DECOR_CUT)
 
     def floor_under(self, x: float, y: float, z: float) -> float:
         """Sol de la cellule sous ce point (la plus haute sous les pieds). Sur une
@@ -1579,7 +1691,7 @@ class RouteEditor(QMainWindow):
         self.draw_walls()
 
     def show_layer(self, key: str, on: bool):
-        if key in ("walls", "floor", "passages"):
+        if key in ("walls", "floor", "passages", "decor"):
             self.walls_3d_dirty = True
         self.schedule_3d()
         if key == "soldiers":
@@ -1804,7 +1916,31 @@ class RouteEditor(QMainWindow):
         return min(hits, key=lambda h: math.hypot(self.geom.routes[h[0]].points[h[1]].position[0] - scene_pos.x(),
                                                  self.geom.routes[h[0]].points[h[1]].position[2] + scene_pos.y()))
 
+    def sync_route_from_game(self, r: int) -> bool:
+        """Edition en direct : relit la route dans le jeu (elle a pu etre modifiee
+        avant le lancement de l'editeur). Vrai si quelque chose a change."""
+        route = self.geom.routes[r]
+        location = self.link.route_location(route.ident)
+        if location is None or location[1] != len(route.points):
+            return False
+        data = self.link.read_points(*location)
+        if data is None:
+            return False
+        changed = False
+        for i, pt in enumerate(route.points):
+            x, y, z, flags, lx, ly, lz, action, move, wait, angle = struct.unpack_from("<3fI3f4H", data, POINT_SIZE * i)
+            fresh = dict(position=(x, y, z), flags=flags, look=(lx, ly, lz), action=action, move=move, wait=wait, angle=angle)
+            for key, value in fresh.items():
+                if getattr(pt, key) != value:
+                    setattr(pt, key, value)
+                    changed = True
+        if changed and route.ident in self.live_state and self.live_backup[route.ident][0] == location[0]:
+            self.live_state[route.ident] = data
+        return changed
+
     def select_game_point(self, r: int, i: int):
+        if self.live and self.sync_route_from_game(r):
+            self.redraw_game_route(r)
         self.game_pick = (r, i)
         if self.selected != -1:
             self.selected = -1
@@ -1864,8 +2000,14 @@ class RouteEditor(QMainWindow):
         self.game_angle.setValue(round(pt.angle * 360 / 0x10000) % 360)
         for widget in (self.game_wait, self.game_angle, self.game_forever):
             widget.blockSignals(False)
-        for widget in (self.game_action, self.game_move, self.game_wait, self.game_angle, self.game_forever):
+        for widget in (self.game_action, self.game_move, self.game_wait, self.game_angle, self.game_forever,
+                       *self.game_look.values()):
             widget.setEnabled(self.live)
+        self.look_snake_button.setEnabled(self.live and self.snake is not None)
+        for key, value in zip("xyz", pt.look):
+            self.game_look[key].blockSignals(True)
+            self.game_look[key].setValue(value)
+            self.game_look[key].blockSignals(False)
         self.name_action_button.setEnabled(True)
         self.game_flags.setText(f"Drapeaux 0x{pt.flags:X}" + (" · poste de garde" if pt.flags & 2 else ""))
         stacked = [h for h in self.stacked_points(pt.position[0], pt.position[2]) if h != (r, i)]
