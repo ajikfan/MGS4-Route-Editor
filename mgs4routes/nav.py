@@ -94,7 +94,39 @@ def crossed_by(segments, paths, max_step: float = 20000.0) -> list[bool]:
 
 
 # ------------------------------------------------------------ cellules (BSP)
-CELL_CACHE_VERSION = 1
+CELL_CACHE_VERSION = 2
+# Nature d'une cellule (2026-11-21, s01a57l : mur derriere une caisse, caisse) :
+# chaque passage a une plage de hauteur (pied, hauteur libre). Un mur bas ou
+# une caisse est une cellule fine (ou petite) aux passages limites en
+# hauteur ; une grande cellule a faible hauteur libre est un abri (auvent,
+# porche, dessous de passerelle).
+OBSTACLE_WIDTH = 900      # mm : plus fine que ca = obstacle (mur, muret, poteau)
+OBSTACLE_LOW = 1500       # mm de hauteur libre : en dessous, petite cellule = obstacle
+OBSTACLE_AREA = 4.0e6     # mm2 (4 m2)
+SHELTER_LOW = 2500        # mm de hauteur libre : en dessous = abri
+
+
+def _min_width(poly) -> float:
+    best = None
+    for i in range(len(poly)):
+        p, q = poly[i], poly[(i + 1) % len(poly)]
+        length = ((q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2) ** 0.5
+        if length < 1:
+            continue
+        far = max(abs((q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])) / length for r in poly)
+        best = far if best is None else min(best, far)
+    return best or 0.0
+
+
+def _area(poly) -> float:
+    return abs(sum(p[0] * q[1] - q[0] * p[1] for p, q in zip(poly, poly[1:] + poly[:1]))) / 2
+
+
+def cell_kind(poly, clearance: float) -> str:
+    """"obstacle", "shelter" (abri) ou "floor"."""
+    if _min_width(poly) < OBSTACLE_WIDTH or (clearance < OBSTACLE_LOW and _area(poly) < OBSTACLE_AREA):
+        return "obstacle"
+    return "shelter" if clearance < SHELTER_LOW else "floor"
 
 
 def _clip(poly, nx: float, nz: float, d: float, positive: bool):
@@ -172,8 +204,11 @@ def cells(data: bytes) -> list[dict]:
             if on_x or on_z:
                 continue
             walls += _uncovered(p, q, segs)
+        clearance = min(s[5] for s in segs)
         out.append({"polygon": [(round(x), round(z)) for x, z in poly],
                     "floor": min(s[4] for s in segs),
+                    "clearance": round(clearance),
+                    "kind": cell_kind(poly, clearance),
                     "walls": [tuple(round(v) for v in w) for w in walls],
                     "portals": [tuple(round(v) for v in s[:6]) for s in segs]})
     return out

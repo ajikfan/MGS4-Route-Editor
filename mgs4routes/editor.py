@@ -1180,9 +1180,20 @@ class RouteEditor(QMainWindow):
         if self.walls_3d_dirty:
             # coupe comme un plan d'architecte : rien au-dessus du niveau affiche + 2 m
             cut = [c for c in self.cells if c["floor"] <= self.level + LEVEL_ABOVE]
-            floors = [(c["polygon"], c["floor"]) for c in cut] if self.layer_checks["floor"].isChecked() else []
-            walls = [(*w, c["floor"], WALL_HEIGHT_3D) for c in cut for w in c["walls"]] \
-                if self.layer_checks["walls"].isChecked() else []
+            floors, walls = [], []
+            for c in cut:
+                if c.get("kind") == "obstacle":  # bloc : dessus a la hauteur libre, cotes en murs
+                    top = min(c.get("clearance", WALL_HEIGHT_3D), WALL_HEIGHT_3D)
+                    if self.layer_checks["floor"].isChecked():
+                        floors.append((c["polygon"], c["floor"] + top))
+                    if self.layer_checks["walls"].isChecked():
+                        poly = c["polygon"]
+                        walls += [(*p, *q, c["floor"], top) for p, q in zip(poly, poly[1:] + poly[:1])]
+                    continue
+                if self.layer_checks["floor"].isChecked():
+                    floors.append((c["polygon"], c["floor"]))
+                if self.layer_checks["walls"].isChecked():
+                    walls += [(*w, c["floor"], WALL_HEIGHT_3D) for w in c["walls"]]
             self.view3d.set_world(floors, walls, self.level)
             self.walls_3d_dirty = False
         polylines, markers = [], []
@@ -1454,13 +1465,27 @@ class RouteEditor(QMainWindow):
         low, high = self.level - LEVEL_BELOW, self.level + LEVEL_ABOVE
         here = [c for c in self.cells if low <= c["floor"] <= high]
         others = [c for c in self.cells if not low <= c["floor"] <= high]
-        floor_here, floor_other = QPainterPath(), QPainterPath()
-        floor_here.setFillRule(Qt.FillRule.WindingFill)
-        floor_other.setFillRule(Qt.FillRule.WindingFill)
-        for path, group in ((floor_here, here), (floor_other, others)):
-            for cell in group:
+
+        def area(cells):
+            path = QPainterPath()
+            path.setFillRule(Qt.FillRule.WindingFill)
+            for cell in cells:
                 path.addPolygon(QPolygonF([to_scene(x, z) for x, z in cell["polygon"]]))
                 path.closeSubpath()
+            return path
+
+        # relief : 5 teintes selon la hauteur du sol dans le niveau
+        ground = [c for c in here if c.get("kind", "floor") != "obstacle"]
+        relief = []
+        for step in range(5):
+            lo = low + (high - low) * step / 5
+            hi = low + (high - low) * (step + 1) / 5
+            cells = [c for c in ground if lo <= c["floor"] < hi or (step == 4 and c["floor"] == high)]
+            if cells:
+                shade = QColor.fromHsv(212, 90, 52 + step * 9)
+                relief.append((area(cells), shade))
+        shelters = area([c for c in here if c.get("kind") == "shelter"])
+        obstacles = area([c for c in here if c.get("kind") == "obstacle"])
         walls, passages = QPainterPath(), QPainterPath()
         count = 0
         for cell in here:
@@ -1471,10 +1496,15 @@ class RouteEditor(QMainWindow):
             for x1, z1, x2, z2, _y, _h in cell["portals"]:
                 passages.moveTo(to_scene(x1, z1))
                 passages.lineTo(to_scene(x2, z2))
-        items = (("floor", self.scene.addPath(floor_other, QPen(Qt.PenStyle.NoPen), QBrush(QColor("#141a22"))), -12),
-                 ("floor", self.scene.addPath(floor_here, QPen(Qt.PenStyle.NoPen), QBrush(QColor("#24303d"))), -11),
-                 ("passages", self.scene.addPath(passages, cosmetic("#5f8f6b", 1, Qt.PenStyle.DotLine)), -7),
-                 ("walls", self.scene.addPath(walls, cosmetic("#e6e9ef", 1.4)), -6))
+        hatch = QBrush(QColor(255, 255, 255, 28), Qt.BrushStyle.BDiagPattern)
+        items = [("floor", self.scene.addPath(area(others), QPen(Qt.PenStyle.NoPen), QBrush(QColor("#141a22"))), -12)]
+        items += [("floor", self.scene.addPath(path, QPen(Qt.PenStyle.NoPen), QBrush(shade)), -11) for path, shade in relief]
+        items += [("floor", self.scene.addPath(shelters, QPen(Qt.PenStyle.NoPen), hatch), -10.5),
+                  ("floor", self.scene.addPath(obstacles, cosmetic("#8a97a8", 1), QBrush(QColor("#5b6878"))), -10),
+                  ("floor", self.scene.addPath(obstacles, QPen(Qt.PenStyle.NoPen), QBrush(QColor(16, 21, 28, 90),
+                                                                                       Qt.BrushStyle.FDiagPattern)), -9.5)]
+        items += [("passages", self.scene.addPath(passages, cosmetic("#5f8f6b", 1, Qt.PenStyle.DotLine)), -7),
+                  ("walls", self.scene.addPath(walls, cosmetic("#e6e9ef", 1.4)), -6)]
         for key, item, z in items:
             item.setZValue(z)
             item.setVisible(self.layer_checks[key].isChecked())
@@ -1488,7 +1518,7 @@ class RouteEditor(QMainWindow):
         """Niveau auto : hauteur de Snake (s'il est dans la zone), sinon le sol des routes."""
         if not self.level_auto.isChecked():
             return
-        target = self.snake[1] if self.snake else self.ground_height()
+        target = self.floor_under(*self.snake) if self.snake else self.ground_height()
         if force or abs(target - self.level) > LEVEL_FOLLOW:
             self.level = target
             self.level_spin.blockSignals(True)
@@ -1496,6 +1526,28 @@ class RouteEditor(QMainWindow):
             self.level_spin.blockSignals(False)
             if redraw:
                 self.draw_level()
+
+    def floor_under(self, x: float, y: float, z: float) -> float:
+        """Sol de la cellule sous ce point (la plus haute sous les pieds). Sur une
+        caisse ou un muret (cellule obstacle), c'est le sol a leur pied."""
+        best = None
+        for cell in self.cells:
+            if cell["floor"] > y + 300:
+                continue
+            poly = cell["polygon"]
+            sign = None
+            for p, q in zip(poly, poly[1:] + poly[:1]):
+                c = (q[0] - p[0]) * (z - p[1]) - (q[1] - p[1]) * (x - p[0])
+                if abs(c) < 1:
+                    continue
+                if sign is None:
+                    sign = c > 0
+                elif sign != (c > 0):
+                    break
+            else:
+                if best is None or cell["floor"] > best:
+                    best = cell["floor"]
+        return y if best is None else best
 
     def level_changed(self, value: float):
         self.level_auto.blockSignals(True)
