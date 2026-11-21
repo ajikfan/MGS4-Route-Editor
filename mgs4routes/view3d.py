@@ -14,7 +14,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QMatrix4x4, QOpenGLFunctions, QSurfaceFormat, QVector3D
 from PySide6.QtOpenGL import QOpenGLBuffer, QOpenGLShader, QOpenGLShaderProgram
 from PySide6.QtOpenGLWidgets import QOpenGLWidget
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
+from PySide6.QtWidgets import QLabel
 
 GL_LINES, GL_TRIANGLES = 0x0001, 0x0004
 GL_FLOAT = 0x1406
@@ -138,6 +138,23 @@ def wall_meshes(walls, ground: float | None = None, cut: float | None = None) ->
     return tri.reshape(-1, 7), edges.reshape(-1, 7)
 
 
+def floor_mesh(floors) -> np.ndarray:
+    """Triangles des sols (polygones convexes en eventail), teintes selon la hauteur."""
+    if not floors:
+        return np.zeros((0, 7), np.float32)
+    heights = [y for _poly, y in floors]
+    low, high = min(heights), max(heights)
+    span = max(high - low, 1.0)
+    rows = []
+    for poly, y in floors:
+        t = (y - low) / span
+        color = (0.13 + 0.16 * t, 0.19 + 0.17 * t, 0.26 + 0.16 * t, 1.0)  # plus clair en hauteur
+        pts = [(x / 1000.0, y / 1000.0, -z / 1000.0) for x, z in poly]
+        for a, b in zip(pts[1:], pts[2:]):
+            rows += [(*pts[0], *color), (*a, *color), (*b, *color)]
+    return np.array(rows, np.float32)
+
+
 class View3D(QOpenGLWidget):
     """Vue 3D orbitale."""
     status = Signal(str)
@@ -151,6 +168,7 @@ class View3D(QOpenGLWidget):
         self.setMinimumSize(200, 200)
         self.gl = None
         self.program = None
+        self.floors = Mesh(GL_TRIANGLES)
         self.walls = Mesh(GL_TRIANGLES)
         self.wall_edges = Mesh(GL_LINES)
         self.grid = Mesh(GL_LINES)
@@ -159,44 +177,26 @@ class View3D(QOpenGLWidget):
         self.yaw, self.pitch, self.distance = 0.0, math.radians(55), 80.0
         self._drag = None
         self._button = None
-        self._walls, self._ground = [], 0.0
-        self.cut = 4.0  # metres au-dessus du sol ; None = hauteur reelle
         self.hint = QLabel("Glisser : tourner · clic droit : déplacer · molette : zoom · double-clic : vue de dessus", self)
         self.hint.setObjectName("overlay")
-        self.tools = QWidget(self)
-        row = QHBoxLayout(self.tools)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(6)
-        self.cut_button = QPushButton("Murs coupés à 4 m")
-        self.cut_button.setCheckable(True)
-        self.cut_button.setChecked(True)
-        self.cut_button.setToolTip("Coupés : on voit les routes entre les murs.\nDécoché : hauteur réelle des murs.")
-        self.cut_button.toggled.connect(self.set_cut)
-        row.addWidget(self.cut_button)
 
     # -------------------------------------------------- donnees
-    def set_cut(self, on: bool):
-        self.cut = 4.0 if on else None
-        self.cut_button.setText("Murs coupés à 4 m" if on else "Murs : hauteur réelle")
-        self.set_walls(self._walls, self._ground)
-
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.hint.adjustSize()
         self.hint.move(16, 16)
-        self.tools.adjustSize()
-        self.tools.move(self.width() - self.tools.width() - 16, 16)
 
     def mouseDoubleClickEvent(self, event):
         self.pitch = math.radians(89)
         self.yaw = 0.0
         self.update()
 
-    def set_walls(self, walls, ground: float):
-        self._walls, self._ground = walls, ground
-        tri, edges = wall_meshes(walls, ground, self.cut)
+    def set_world(self, floors, walls, ground: float):
+        """floors : [(polygone [(x, z)], hauteur du sol)] ; walls : [(x1, z1, x2, z2, pied, hauteur)] (mm)."""
+        tri, edges = wall_meshes(walls)
         self.walls.set(tri)
         self.wall_edges.set(edges)
+        self.floors.set(floor_mesh(floors))
         self.set_grid(walls, ground)
         self.update()
 
@@ -285,6 +285,8 @@ class View3D(QOpenGLWidget):
         self.program.setUniformValue("mvp", self.matrix())
         self.grid.draw(gl, self.program)
         gl.glEnable(GL_POLYGON_OFFSET_FILL)
+        gl.glPolygonOffset(2.0, 2.0)  # sols sous les lignes des routes
+        self.floors.draw(gl, self.program)
         gl.glPolygonOffset(1.0, 1.0)  # aretes au-dessus des faces
         self.walls.draw(gl, self.program)
         gl.glDisable(GL_POLYGON_OFFSET_FILL)

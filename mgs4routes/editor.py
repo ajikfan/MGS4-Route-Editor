@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 
 from mgs4routes import geom as geomlib
 from mgs4routes.game import NAV_TYPE, GameLink
-from mgs4routes.nav import NavIndex, crossed_by
+from mgs4routes.nav import CellCache, NavIndex
 from mgs4routes.view3d import View3D
 from mgs4routes.vpak import STAGE_ARCHIVES, StageFiles
 
@@ -40,6 +40,7 @@ DATA_DIR = (os.path.dirname(os.path.abspath(sys.executable)) if getattr(sys, "fr
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 ROUTES_DIR = os.path.join(DATA_DIR, "routes")
 NAV_INDEX_FILE = os.path.join(DATA_DIR, "cache", "nv2_index.json")
+CELL_CACHE_DIR = os.path.join(DATA_DIR, "cache", "cells")
 ACTION_NAMES_FILE = os.path.join(DATA_DIR, "action_names.json")
 ZONE_BLOCKS_FILE = os.path.join(DATA_DIR, "zone_blocks.json")  # blocs vus en jeu : zone -> progression -> ids
 STEAM_GUESSES = (
@@ -54,9 +55,10 @@ TOOLS = ("select", "point", "insert", "move", "delete")
 ACCENT = "#f0883e"
 POINT_SIZE = 0x30   # point de route en memoire (position en +0)
 HEIGHT_GAP = 1000   # ecart de hauteur (mm) avec un voisin au-dela duquel on previent
-# Murs de limite de zone : pied a -6 m (sous le terrain), 12 a 26 m de haut,
-# souvent tres longs (murs invisibles des bords de carte, s01a57l)
-BOUNDARY_FOOT = -5000
+# Niveau affiche sur la carte : cellules dont le sol est entre niveau - 1,5 m
+# et niveau + 2 m ; en mode auto, le niveau suit Snake s'il s'en ecarte de 1 m
+LEVEL_BELOW, LEVEL_ABOVE, LEVEL_FOLLOW = 1500, 2000, 1000
+WALL_HEIGHT_3D = 2500
 # Champs d'un point de route du jeu (voir geom.RoutePoint) : decalage, format
 POINT_FIELDS = {"flags": (0x0C, "<I"), "action": (0x1C, "<H"), "move": (0x1E, "<H"),
                 "wait": (0x20, "<H"), "angle": (0x22, "<H")}
@@ -470,7 +472,7 @@ class RouteEditor(QMainWindow):
         self.snake = None
         self.game_location = None
         self._building = False
-        self._game_items = {"grid": [], "walls": [], "limits": [], "passages": [], "routes": [], "markers": [], "objects": []}
+        self._game_items = {"grid": [], "floor": [], "walls": [], "passages": [], "routes": [], "markers": [], "objects": []}
         self._route_items = []
         self._highlight = None
         self._pick_item = None
@@ -489,7 +491,8 @@ class RouteEditor(QMainWindow):
         self.live_backup = {}         # identifiant -> (adresse, octets d'origine)
         self.live_state = {}          # identifiant -> octets ecrits (attendus en memoire)
         self._geom_zone_of_backup = None
-        self.wall_segments, self.limit_segments, self.passage_segments = [], [], []
+        self.cells = []               # cellules praticables des blocs de la zone
+        self.level = 0.0              # hauteur du sol affiche (mm)
         self.walls_3d_dirty = True
         self._3d_pending = False
 
@@ -662,19 +665,32 @@ class RouteEditor(QMainWindow):
         lay.setSpacing(8)
         lay.addWidget(_section("Calques"))
         self.layer_checks = {}
-        for key, text in (("soldiers", "Soldats (en direct)"), ("walls", "Murs et obstacles"),
-                          ("passages", "Passages (traversés par une route)"), ("limits", "Limites de la zone"),
+        for key, text in (("soldiers", "Soldats (en direct)"), ("floor", "Sol praticable"),
+                          ("walls", "Murs et obstacles"), ("passages", "Passages entre cellules"),
                           ("grid", "Grille de la zone"), ("routes", "Routes du jeu"),
                           ("markers", "Repères"), ("objects", "Objets de collision")):
             check = QCheckBox(text)
-            check.setChecked(key not in ("objects", "limits", "passages"))
+            check.setChecked(key not in ("objects", "passages", "markers", "grid"))
             check.toggled.connect(lambda on, k=key: self.show_layer(k, on))
             self.layer_checks[key] = check
             lay.addWidget(check)
-        for text in ("Sol praticable (à venir)", "Décor 3D (à venir)"):
-            check = QCheckBox(text)
-            check.setEnabled(False)
-            lay.addWidget(check)
+        level = QHBoxLayout()
+        level.setSpacing(6)
+        level.addWidget(_field("Niveau"))
+        self.level_spin = QDoubleSpinBox()
+        self.level_spin.setRange(-100.0, 300.0)
+        self.level_spin.setDecimals(1)
+        self.level_spin.setSingleStep(0.5)
+        self.level_spin.setSuffix(" m")
+        self.level_spin.setToolTip("Hauteur du sol affiché : cellules de -1,5 m à +2 m autour")
+        self.level_spin.valueChanged.connect(self.level_changed)
+        level.addWidget(self.level_spin, stretch=1)
+        self.level_auto = QCheckBox("Auto")
+        self.level_auto.setChecked(True)
+        self.level_auto.setToolTip("Suivre la hauteur de Snake (sinon celle des routes de la zone)")
+        self.level_auto.toggled.connect(lambda on: self.update_level(force=True) if on else None)
+        level.addWidget(self.level_auto)
+        lay.addLayout(level)
         self.blocks_label = QLabel("")
         self.blocks_label.setObjectName("hint")
         self.blocks_label.setWordWrap(True)
@@ -998,6 +1014,7 @@ class RouteEditor(QMainWindow):
         for code in sorted(self.geoms):
             self.zone_combo.addItem(f"{code}   {ACT_NAMES.get(code[:3], '')}", code)
         self.nav = NavIndex(self.files, NAV_INDEX_FILE)
+        self.cell_cache = CellCache(self.files, CELL_CACHE_DIR)
 
         def progress(i, n):
             if i % 10 == 0:
@@ -1031,12 +1048,11 @@ class RouteEditor(QMainWindow):
         self._soldier_ring = None
         self.selected_soldier = None
         self._handle = None
-        self._game_items = {"grid": [], "walls": [], "limits": [], "passages": [], "routes": [], "markers": [], "objects": []}
+        self._game_items = {"grid": [], "floor": [], "walls": [], "passages": [], "routes": [], "markers": [], "objects": []}
         self._route_items = []
         self._highlight = None
         self._pick_item = None
         self.dragging_game_point = False
-        self.wall_segments, self.limit_segments = [], []
         self.walls_3d_dirty = True
         self.game_pick = None
         self._snake_item = None
@@ -1137,8 +1153,7 @@ class RouteEditor(QMainWindow):
         if mode == "3D":
             self.map_stack.setCurrentWidget(self.view3d)
             center = self.view.mapToScene(self.view.viewport().rect().center())
-            ground = self.ground_height()
-            self.view3d.look_at(center.x(), ground, -center.y())
+            self.view3d.look_at(center.x(), self.level, -center.y())
             self.walls_3d_dirty = True
             self.refresh_3d()
             self.view.hint.hide()
@@ -1148,8 +1163,6 @@ class RouteEditor(QMainWindow):
 
     def ground_height(self) -> float:
         """Hauteur la plus frequente des points de route (le sol de la zone)."""
-        if self.snake:
-            return self.snake[1]
         heights = [round(p.position[1], -2) for r in (self.geom.routes if self.geom else []) for p in r.points]
         return max(set(heights), key=heights.count) if heights else 0.0
 
@@ -1165,12 +1178,12 @@ class RouteEditor(QMainWindow):
         if self.map_stack.currentWidget() is not self.view3d or self.geom is None:
             return
         if self.walls_3d_dirty:
-            walls = list(self.wall_segments) if self.layer_checks["walls"].isChecked() else []
-            if self.layer_checks["limits"].isChecked():
-                walls += self.limit_segments
-            if self.layer_checks["passages"].isChecked():
-                walls += self.passage_segments
-            self.view3d.set_walls(walls, self.ground_height())
+            # coupe comme un plan d'architecte : rien au-dessus du niveau affiche + 2 m
+            cut = [c for c in self.cells if c["floor"] <= self.level + LEVEL_ABOVE]
+            floors = [(c["polygon"], c["floor"]) for c in cut] if self.layer_checks["floor"].isChecked() else []
+            walls = [(*w, c["floor"], WALL_HEIGHT_3D) for c in cut for w in c["walls"]] \
+                if self.layer_checks["walls"].isChecked() else []
+            self.view3d.set_world(floors, walls, self.level)
             self.walls_3d_dirty = False
         polylines, markers = [], []
         if self.layer_checks["routes"].isChecked():
@@ -1424,37 +1437,72 @@ class RouteEditor(QMainWindow):
         return self.nav.covering((x0 - mx, z0 - mz, x1 + mx, z1 + mz)), "automatique"
 
     def draw_walls(self):
-        for key in ("walls", "limits", "passages"):
+        """Sol et murs a partir des cellules de navigation (voir nav.cells)."""
+        paths, source = self.zone_blocks()
+        self.cells = [cell for path in paths for cell in self.cell_cache.get(path)]
+        self._blocks_text = (f"Carte : {len(paths)} bloc(s), {len(self.cells)} cellules · {source}"
+                             + ("\n" + ", ".join(p.split("/")[-1][:8] for p in paths[:6]) + ("…" if len(paths) > 6 else "")
+                                if paths else ""))
+        self.update_level(force=True, redraw=False)
+        self.draw_level()
+
+    def draw_level(self):
+        for key in ("floor", "walls", "passages"):
             for item in self._game_items[key]:
                 self.scene.removeItem(item)
             self._game_items[key] = []
-        paths, source = self.zone_blocks()
-        self.wall_segments, self.limit_segments = [], []
-        for path in paths:
-            for wall in self.nav.walls(path):
-                (self.limit_segments if wall[4] <= BOUNDARY_FOOT else self.wall_segments).append(wall)
-        # segments traverses par une route du jeu : decoupes du sol, pas des murs
-        crossed = crossed_by(self.wall_segments, [[p.position for p in r.points] for r in self.geom.routes])
-        self.passage_segments = [w for w, c in zip(self.wall_segments, crossed) if c]
-        self.wall_segments = [w for w, c in zip(self.wall_segments, crossed) if not c]
-        for key, segments, pen, z in (("walls", self.wall_segments, cosmetic("#d7dde6", 1.2), -6),
-                                      ("passages", self.passage_segments, cosmetic("#5f8f6b", 1, Qt.PenStyle.DotLine), -7),
-                                      ("limits", self.limit_segments, cosmetic("#7d8794", 1, Qt.PenStyle.DashLine), -7)):
-            lines = QPainterPath()
-            for x1, z1, x2, z2, _y, _h in segments:
-                lines.moveTo(to_scene(x1, z1))
-                lines.lineTo(to_scene(x2, z2))
-            item = self.scene.addPath(lines, pen)
+        low, high = self.level - LEVEL_BELOW, self.level + LEVEL_ABOVE
+        here = [c for c in self.cells if low <= c["floor"] <= high]
+        others = [c for c in self.cells if not low <= c["floor"] <= high]
+        floor_here, floor_other = QPainterPath(), QPainterPath()
+        floor_here.setFillRule(Qt.FillRule.WindingFill)
+        floor_other.setFillRule(Qt.FillRule.WindingFill)
+        for path, group in ((floor_here, here), (floor_other, others)):
+            for cell in group:
+                path.addPolygon(QPolygonF([to_scene(x, z) for x, z in cell["polygon"]]))
+                path.closeSubpath()
+        walls, passages = QPainterPath(), QPainterPath()
+        count = 0
+        for cell in here:
+            for x1, z1, x2, z2 in cell["walls"]:
+                walls.moveTo(to_scene(x1, z1))
+                walls.lineTo(to_scene(x2, z2))
+                count += 1
+            for x1, z1, x2, z2, _y, _h in cell["portals"]:
+                passages.moveTo(to_scene(x1, z1))
+                passages.lineTo(to_scene(x2, z2))
+        items = (("floor", self.scene.addPath(floor_other, QPen(Qt.PenStyle.NoPen), QBrush(QColor("#141a22"))), -12),
+                 ("floor", self.scene.addPath(floor_here, QPen(Qt.PenStyle.NoPen), QBrush(QColor("#24303d"))), -11),
+                 ("passages", self.scene.addPath(passages, cosmetic("#5f8f6b", 1, Qt.PenStyle.DotLine)), -7),
+                 ("walls", self.scene.addPath(walls, cosmetic("#e6e9ef", 1.4)), -6))
+        for key, item, z in items:
             item.setZValue(z)
             item.setVisible(self.layer_checks[key].isChecked())
             self._game_items[key].append(item)
-        count = len(self.wall_segments)
+        self.blocks_label.setText(f"{self._blocks_text}\nNiveau {self.level / 1000:.1f} m : "
+                                  f"{len(here)} cellules, {count} murs")
         self.walls_3d_dirty = True
         self.schedule_3d()
-        names = ", ".join(p.split("/")[-1][:8] for p in paths[:6]) + ("…" if len(paths) > 6 else "")
-        text = (f"Carte : {len(paths)} bloc(s), {count} murs, {len(self.passage_segments)} passages, "
-                f"{len(self.limit_segments)} limites · {source}")
-        self.blocks_label.setText(text + ("\n" + names if paths else ""))
+
+    def update_level(self, force: bool = False, redraw: bool = True):
+        """Niveau auto : hauteur de Snake (s'il est dans la zone), sinon le sol des routes."""
+        if not self.level_auto.isChecked():
+            return
+        target = self.snake[1] if self.snake else self.ground_height()
+        if force or abs(target - self.level) > LEVEL_FOLLOW:
+            self.level = target
+            self.level_spin.blockSignals(True)
+            self.level_spin.setValue(target / 1000)
+            self.level_spin.blockSignals(False)
+            if redraw:
+                self.draw_level()
+
+    def level_changed(self, value: float):
+        self.level_auto.blockSignals(True)
+        self.level_auto.setChecked(False)
+        self.level_auto.blockSignals(False)
+        self.level = value * 1000
+        self.draw_level()
 
     def learn_blocks(self):
         """Jeu dans la zone affichee : retient les blocs qu'il a charges."""
@@ -1479,7 +1527,7 @@ class RouteEditor(QMainWindow):
         self.draw_walls()
 
     def show_layer(self, key: str, on: bool):
-        if key in ("walls", "limits", "passages"):
+        if key in ("walls", "floor", "passages"):
             self.walls_3d_dirty = True
         self.schedule_3d()
         if key == "soldiers":
@@ -2009,6 +2057,8 @@ class RouteEditor(QMainWindow):
         if self.selected_soldier is not None and not self.dragging_game_point:
             self.follow_soldier()
         self.draw_soldiers()
+        if self.snake and self.cells:
+            self.update_level()
         self.schedule_3d()
         self.update_status()
         self._poll_count = getattr(self, "_poll_count", 0) + 1
