@@ -148,6 +148,9 @@ CAMP_NAMES = {0: "neutre", 1: "PMC", 2: "milice / rebelles"}
 # couleur des PNJ sur la carte, selon le camp
 CAMP_COLORS = {1: "#ff5c5c", 2: "#4fd18b", 0: "#a3adbb"}
 ALLY_COLOR = "#5aa9ff"
+ANIMAL_COLOR = "#f2c94c"
+ANIMAL_NAMES = {"Hen": "Poule", "RatCuy": "Cochon d'Inde (cuy)", "Crow": "Corbeau", "Rat": "Rat",
+                "Frog": "Grenouille", "Dog": "Chien", "Wolf": "Loup", "Bird": "Oiseau"}
 
 
 def camp_color(camp: int) -> str:
@@ -585,6 +588,7 @@ class RouteEditor(QMainWindow):
         self._snake_item = None
         self.game_pick = None
         self.soldiers = []
+        self.animals, self._animal_managers, self._animal_items = [], [], []
         self.selected_soldier = None  # acteur suivi sur la carte
         self.dragging_game_point = False
         # edition en direct : gardee quand on change de zone affichee (le jeu,
@@ -784,7 +788,8 @@ class RouteEditor(QMainWindow):
         lay.setSpacing(8)
         lay.addWidget(_section("Calques"))
         self.layer_checks = {}
-        for key, text in (("soldiers", "PNJ (en direct)"), ("decor", "Décor (formes de collision)"),
+        for key, text in (("soldiers", "PNJ (en direct)"), ("animals", "Animaux (en direct)"),
+                          ("decor", "Décor (formes de collision)"),
                           ("floor", "Sol praticable"),
                           ("walls", "Murs et obstacles"), ("passages", "Passages entre cellules"),
                           ("grid", "Grille de la zone"), ("routes", "Routes du jeu"),
@@ -798,7 +803,9 @@ class RouteEditor(QMainWindow):
                 dot = '<span style="color:{0}; font-size:14px;">●</span>&nbsp;{1}'
                 legend = QLabel("&nbsp;&nbsp;".join((dot.format(CAMP_COLORS[1], "PMC"), dot.format(CAMP_COLORS[2], "rebelles"),
                                                      dot.format(ALLY_COLOR, "alliés"),
-                                                     '<span style="font-size:14px;">○</span>&nbsp;sans route')))
+                                                     '<span style="font-size:14px;">○</span>&nbsp;sans route',
+                                                     f'<span style="color:{ANIMAL_COLOR}; font-size:13px;">◆</span>&nbsp;animaux')))
+                legend.setWordWrap(True)
                 legend.setTextFormat(Qt.TextFormat.RichText)
                 legend.setObjectName("hint")
                 legend.setContentsMargins(24, 0, 0, 2)
@@ -1412,6 +1419,7 @@ class RouteEditor(QMainWindow):
         self.selected = -1
         self.scene.clear()
         self._soldier_items = []
+        self._animal_items = []
         self._soldier_ring = None
         self.selected_soldier = None
         self._handle = None
@@ -1601,6 +1609,8 @@ class RouteEditor(QMainWindow):
                 chosen = soldier["actor"] == self.selected_soldier
                 color = ACCENT if chosen else camp_color(soldier.get("camp", 1))
                 markers.append((soldier["position"], color, 1.8))
+        if self.layer_checks["animals"].isChecked():
+            markers += [(animal["position"], ANIMAL_COLOR, 0.5) for animal in self.animals]
         if self.snake:
             markers.append((self.snake, "#e6e9ef", 1.8))
         self.view3d.set_overlay(polylines, markers)
@@ -2056,6 +2066,12 @@ class RouteEditor(QMainWindow):
         if key == "soldiers":
             for item in getattr(self, "_soldier_items", ()):
                 item.setVisible(on)
+            self.schedule_3d()
+            return
+        if key == "animals":
+            for item in getattr(self, "_animal_items", ()):
+                item.setVisible(on)
+            self.schedule_3d()
             return
         if key == "routes":
             if getattr(self, "geom", None) is not None and hasattr(self, "_game_route_items"):
@@ -2663,6 +2679,10 @@ class RouteEditor(QMainWindow):
         self.draw_snake()
         here = bool(state and self.game_location and self.game_location[0] == self.zone)
         self.soldiers = self.link.soldiers() if here else []
+        if here and (getattr(self, "_poll_count", 0) % 10 == 0 or not self._animal_managers):  # troupeaux relus toutes les 5 s
+            self._animal_managers = self.link.animal_list(self.link.task_actors("AnimalManager"))
+        self.animals = self.link.animal_positions(self._animal_managers) if here else []
+        self.draw_animals()
         self.live_check_zone()
         if here and (not self.assignable or self._assignable_zone != self.game_location[0]):
             self.assignable = self.link.route_groups()
@@ -3088,6 +3108,27 @@ class RouteEditor(QMainWindow):
             self.link.restore_record(actor, saved)
         del self.npc_backup[actor]
         self.update_assign()
+
+    def draw_animals(self):
+        """Un losange jaune par animal."""
+        if not self.zone:
+            return
+        while len(self._animal_items) < len(self.animals):
+            item = QGraphicsPolygonItem(QPolygonF([QPointF(0, -7), QPointF(6, 0), QPointF(0, 7), QPointF(-6, 0)]))
+            item.setBrush(QBrush(QColor(ANIMAL_COLOR)))
+            item.setPen(QPen(QColor("#10151c"), 1.5))
+            item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
+            item.setZValue(27)
+            self.scene.addItem(item)
+            self._animal_items.append(item)
+        for item, animal in zip(self._animal_items, self.animals):
+            x, y, z = animal["position"]
+            item.setPos(to_scene(x, z))
+            species = ANIMAL_NAMES.get(animal.get("species"), animal.get("species") or "Animal")
+            item.setToolTip(f"{species} · hauteur {y:.0f}")
+            item.setVisible(self.layer_checks["animals"].isChecked())
+        for item in self._animal_items[len(self.animals):]:
+            item.setVisible(False)
 
     def pick_soldier(self, scene_pos: QPointF):
         tolerance = 12 / (abs(self.view.transform().m11()) or 1.0)

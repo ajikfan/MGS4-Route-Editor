@@ -22,10 +22,12 @@ PROCESS_NAME = "mgs4.exe"
 # petit-boutiens), base des decalages des routes)
 ADDRESSES = {
     0x6AE07392: (0x157A8E8, 0x238012D0, 0x238012E0, 0x2367B9D0, 0x23857630, 0x1C9DB88, 0x1BD54B0,
-                 0x23857640),  # 1.4.2
+                 0x23857640, 0x236507D0),  # 1.4.2
 }
 REFERENCE = (0x1C28B28, 0x23EB5150, 0x23EB5160, 0x23D2F6D0, 0x23F0B5B0, 0x234F488, 0x22864B0,
-             0x23F0B5C0)  # 1.4.1
+             0x23F0B5C0, 0x23D044D0)  # 1.4.1
+# dernier : liste des taches du jeu (noeud +0x20 suivant ; acteur en +0x90 ou
+# le noeud + 0xC0), ou sont les troupeaux d'animaux (classe AnimalManager)
 # dernier : liste des groupes de routes (noeud +8 premier, +0x10 suivant, +0x18
 # famille, +0x20 nombre de groupes, +0x28 groupes ; groupe : +8 numero,
 # +0xF04 nombre de routes, +0xF28 routes de 0x10 octets, identifiant en +8)
@@ -50,6 +52,12 @@ RECORD, RECORD_SIZE, RECORD_SLOT = 0x4640, 0x3C, 0x14
 UNIT_GROUP = 0x46EC
 ROUTE_KIND = 0xEA2C5E
 SOLDIER_CAMP, SOLDIER_LIFE = 0x43D0, 0x42B0
+# Animaux (2026-11-21, s02a10l) : un troupeau AnimalManager (souvent un seul
+# par zone) tient la liste de ses animaux, pointeurs entre +0x10 et +0xC10
+# (nombre en +0xC10) ; chaque animal est une fiche Work@Animal<Espece>
+# (AnimalHen = poule, AnimalRatCuy = cochon d'Inde...), position en +0xC0.
+# Les animaux apparus par le trainer s'ajoutent au troupeau existant.
+ANIMAL_LIST, ANIMAL_LIST_END, ANIMAL_POSITION = 0x10, 0xC10, 0xC0
 STAGE_CODE = re.compile(r"s\d\da\d\d\w")
 
 
@@ -184,6 +192,53 @@ class GameLink:
             return out
         except OSError:
             return []
+
+    def task_actors(self, wanted: str) -> list[int]:
+        """Acteurs d'une classe donnee dans la liste des taches du jeu."""
+        if not self.proc:
+            return []
+        out = []
+        try:
+            head = self.base + self.addresses[8]
+            node, seen = self._q(head + 0x20), set()
+            while node and node != head and node not in seen and len(seen) < 20000:
+                seen.add(node)
+                for actor in (self._q(node + 0x90), node + 0xC0):
+                    if actor and self.class_name(actor) == wanted:
+                        out.append(actor)
+                node = self._q(node + 0x20)
+        except OSError:
+            pass
+        return out
+
+    def animal_list(self, managers: list[int]) -> list[tuple[int, str]]:
+        """(fiche, espece) de chaque animal des troupeaux."""
+        out = []
+        for manager in managers:
+            try:
+                raw = self.proc.read_bytes(manager + ANIMAL_LIST, ANIMAL_LIST_END - ANIMAL_LIST)
+            except OSError:
+                continue
+            for k in range(0, len(raw), 8):
+                work = struct.unpack_from("<Q", raw, k)[0]
+                if not 0x10000 < work < 0x7FFFFFFFFFFF:
+                    continue
+                name = self.class_name(work)
+                if name.startswith(".?AUWork@Animal"):
+                    out.append((work, name[len(".?AUWork@Animal"):].rstrip("@")))
+        return out
+
+    def animal_positions(self, animals: list[tuple[int, str]]) -> list[dict]:
+        """Position de chaque animal : {"actor", "species", "position"}."""
+        out = []
+        for work, species in animals:
+            try:
+                position = struct.unpack("<3f", self.proc.read_bytes(work + ANIMAL_POSITION, 12))
+            except OSError:
+                continue
+            if all(v == v and abs(v) < 1e7 for v in position):
+                out.append({"actor": work, "species": species, "position": position})
+        return out
 
     def class_name(self, obj: int) -> str:
         """Nom de classe (RTTI) : .?AVNOM@@ -> NOM."""
