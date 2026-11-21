@@ -54,7 +54,7 @@ MONO = "Consolas"
 ACT_NAMES = {"s00": "Prologue", "s01": "Acte 1 · Moyen-Orient", "s02": "Acte 2 · Amérique du Sud",
              "s03": "Acte 3 · Europe de l'Est", "s04": "Acte 4 · Shadow Moses", "s05": "Acte 5 · Outer Haven",
              "s10": "Hors actes"}
-TOOL_HINTS = {"select": "Clic : choisir un point",
+TOOL_HINTS = {"select": "Clic : choisir un point · clic sur un soldat : sa route",
               "point": "Clic : ajouter un point · Alt+clic : point à la position de Snake",
               "insert": "Clic près d'un segment : insérer un point",
               "move": "Glisser un point pour le déplacer",
@@ -567,7 +567,8 @@ class RouteEditor(QMainWindow):
         lay.setSpacing(8)
         lay.addWidget(_section("Calques"))
         self.layer_checks = {}
-        for key, text in (("walls", "Murs et obstacles"), ("grid", "Grille de la zone"), ("routes", "Routes du jeu"),
+        for key, text in (("soldiers", "Soldats (en direct)"), ("walls", "Murs et obstacles"),
+                          ("grid", "Grille de la zone"), ("routes", "Routes du jeu"),
                           ("markers", "Repères"), ("objects", "Objets de collision")):
             check = QCheckBox(text)
             check.setChecked(key != "objects")
@@ -730,10 +731,17 @@ class RouteEditor(QMainWindow):
         self.current = 0 if self.routes else -1
         self.selected = -1
         self.scene.clear()
+        self._soldier_items = []
+        self._soldier_ring = None
+        self.selected_soldier = None
         self._game_items = {"grid": [], "walls": [], "routes": [], "markers": [], "objects": []}
         self._route_items = []
         self._highlight = None
         self._pick_item = None
+        self._soldier_items = []
+        self._soldier_ring = None
+        self.soldiers = []
+        self.selected_soldier = None  # acteur suivi sur la carte
         self.game_pick = None
         self._snake_item = None
         self.draw_game_layers()
@@ -905,6 +913,8 @@ class RouteEditor(QMainWindow):
             return
         data = _read_json(ZONE_BLOCKS_FILE)
         progress = str(self.game_location[1])
+        # le jeu charge les blocs selon la position de Snake : on les cumule
+        ids = sorted(set(ids) | set(data.get(self.zone, {}).get(progress, [])))
         if data.get(self.zone, {}).get(progress) == ids:
             return
         data.setdefault(self.zone, {})[progress] = ids
@@ -916,6 +926,10 @@ class RouteEditor(QMainWindow):
         self.draw_walls()
 
     def show_layer(self, key: str, on: bool):
+        if key == "soldiers":
+            for item in getattr(self, "_soldier_items", ()):
+                item.setVisible(on)
+            return
         if key == "routes":
             if getattr(self, "geom", None) is not None and hasattr(self, "_game_route_items"):
                 self.apply_game_route_visibility()
@@ -1195,10 +1209,18 @@ class RouteEditor(QMainWindow):
         x, z = scene_pos.x(), -scene_pos.y()
         point = item if isinstance(item, PointItem) else None
         if point is None and self.tool in ("select", "move", "delete"):
+            soldier = self.pick_soldier(scene_pos)
+            index = next((i for i, r in enumerate(self.geom.routes) if soldier and r.ident == soldier["route"]), None)
+            if index is not None and self.geom.routes[index].points:
+                self.selected_soldier = soldier["actor"]
+                self.follow_soldier()
+                self.draw_soldiers()
+                return
             hit = self.pick_game_point(scene_pos)
             if hit:
                 self.select_game_point(*hit)
                 return
+        self.selected_soldier = None
         if self.game_pick is not None:
             self.game_pick = None
             self.draw_pick()
@@ -1362,6 +1384,11 @@ class RouteEditor(QMainWindow):
             self._set_pill(True)
             self.snake = state.get("snake") if self.game_location and self.game_location[0] == self.zone else None
         self.draw_snake()
+        here = bool(state and self.game_location and self.game_location[0] == self.zone)
+        self.soldiers = self.link.soldiers() if here and self.layer_checks["soldiers"].isChecked() else []
+        if self.selected_soldier is not None:
+            self.follow_soldier()
+        self.draw_soldiers()
         self.update_status()
         self._poll_count = getattr(self, "_poll_count", 0) + 1
         if state and self.zone and self._poll_count % 10 == 1:  # toutes les 5 s
@@ -1375,6 +1402,68 @@ class RouteEditor(QMainWindow):
             self.link_label.setProperty("off", not on)
             self.link_label.style().unpolish(self.link_label)
             self.link_label.style().polish(self.link_label)
+
+    def draw_soldiers(self):
+        """Un repere par soldat (rouge : suit une route, gris : sans route)."""
+        if not self.zone:
+            return
+        while len(self._soldier_items) < len(self.soldiers):
+            item = QGraphicsEllipseItem(-6, -6, 12, 12)
+            item.setPen(QPen(QColor("#10151c"), 2))
+            item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
+            item.setZValue(28)
+            self.scene.addItem(item)
+            self._soldier_items.append(item)
+        for item, soldier in zip(self._soldier_items, self.soldiers):
+            x, y, z = soldier["position"]
+            item.setPos(to_scene(x, z))
+            route = soldier["route"]
+            item.setBrush(QBrush(QColor("#ff5c5c" if route else "#8b95a3")))
+            text = f"Soldat · hauteur {y:.0f}"
+            if route:
+                text += f"\nSuit la route {route:06X}, vers le point {soldier['point'] + 1}"
+            item.setToolTip(text)
+            item.setVisible(True)
+        for item in self._soldier_items[len(self.soldiers):]:
+            item.setVisible(False)
+        chosen = next((x for x in self.soldiers if x["actor"] == self.selected_soldier), None)
+        if chosen is None:
+            if self._soldier_ring is not None:
+                self._soldier_ring.setVisible(False)
+            return
+        if self._soldier_ring is None:
+            self._soldier_ring = QGraphicsEllipseItem(-13, -13, 26, 26)
+            self._soldier_ring.setPen(QPen(QColor(ACCENT), 3))
+            self._soldier_ring.setBrush(QBrush(QColor(240, 136, 62, 60)))
+            self._soldier_ring.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
+            self._soldier_ring.setZValue(27)
+            self.scene.addItem(self._soldier_ring)
+        x, _y, z = chosen["position"]
+        self._soldier_ring.setPos(to_scene(x, z))
+        self._soldier_ring.setVisible(self.layer_checks["soldiers"].isChecked())
+
+    def follow_soldier(self):
+        """Route et point vise du soldat choisi, a jour a chaque releve."""
+        soldier = next((x for x in self.soldiers if x["actor"] == self.selected_soldier), None)
+        if soldier is None or not soldier["route"]:
+            return
+        index = next((i for i, r in enumerate(self.geom.routes) if r.ident == soldier["route"]), None)
+        if index is None or not self.geom.routes[index].points:
+            return
+        target = min(soldier["point"], len(self.geom.routes[index].points) - 1)
+        if self.game_pick != (index, target):
+            self.select_game_point(index, target)
+            self.point_title.setText(self.point_title.text().replace("Point ", "Soldat → point ", 1))
+
+    def pick_soldier(self, scene_pos: QPointF):
+        tolerance = 12 / (abs(self.view.transform().m11()) or 1.0)
+        best = None
+        for soldier in self.soldiers:
+            x, _y, z = soldier["position"]
+            d = math.hypot(x - scene_pos.x(), z + scene_pos.y())
+            if d <= tolerance and soldier["route"] and (best is None or d < best[0]):
+                best = (d, soldier)
+        return best[1] if best else None
 
     def draw_snake(self):
         if not self.zone:
@@ -1412,6 +1501,8 @@ class RouteEditor(QMainWindow):
             self.status_zone.setText(f"{self.zone}{progress}")
         if self.snake:
             self.status_snake.setText("Snake ({:.0f}, {:.0f}, {:.0f})".format(*self.snake))
+            if self.soldiers:
+                self.status_snake.setText(self.status_snake.text() + f" · {len(self.soldiers)} soldats")
         elif self.game_location:
             self.status_snake.setText(f"Snake en {self.game_location[0]}")
         else:

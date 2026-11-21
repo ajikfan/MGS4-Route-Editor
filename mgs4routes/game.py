@@ -1,5 +1,6 @@
 """Lien avec le jeu en cours (facultatif) : zone, position de Snake,
-teleportation de Snake. Lecture seule, sauf la position de Snake.
+soldats et routes suivies, teleportation de Snake. Lecture seule, sauf
+la position de Snake.
 
 Adresses relevees avec MGS4-Trainer, par version de l'exe (horodatage de
 l'en-tete PE). Version inconnue : rien n'est lu."""
@@ -11,14 +12,23 @@ from mgs4routes.winproc import ProcessHandle, find_module_base, find_pid
 PROCESS_NAME = "mgs4.exe"
 # horodatage PE -> (pointeur vers linkvarbuf, index du joueur, table des
 # joueurs, dictionnaire des ressources : 16 arbres, noeud = gauche +0,
-# droite +8, cle +0x10 (type << 24 | identifiant, bit 31 = resident))
+# droite +8, cle +0x10 (type << 24 | identifiant, bit 31 = resident),
+# gestionnaire d'alerte (liste des soldats de la zone : nombre +0x30,
+# table +0x38 d'entrees de 0x10, acteur en +8), table des routes chargees
+# (nombre +0, entrees de 0x10 en +8 : identifiant, ?, nombre de points,
+# decalage depuis la base suivante ; points de 0x30 comme dans le .geom,
+# petit-boutiens), base des decalages des routes)
 ADDRESSES = {
-    0x6AE07392: (0x157A8E8, 0x238012D0, 0x238012E0, 0x2367B9D0),  # 1.4.2
+    0x6AE07392: (0x157A8E8, 0x238012D0, 0x238012E0, 0x2367B9D0, 0x23857630, 0x1C9DB88, 0x1BD54B0),  # 1.4.2
 }
-REFERENCE = (0x1C28B28, 0x23EB5150, 0x23EB5160, 0x23D2F6D0)  # 1.4.1 (version de reference du trainer)
+REFERENCE = (0x1C28B28, 0x23EB5150, 0x23EB5160, 0x23D2F6D0, 0x23F0B5B0, 0x234F488, 0x22864B0)  # 1.4.1
 NAV_TYPE = 0x15  # type de ressource des .nv2
 STAGE_CODE_OFFSET, PROGRESS_OFFSET = 0x34, 0x54
 PLAYER_ENTRY_SIZE, TRANSFORM_POSITION = 0x80, 0x10
+# soldat : position +0x2D0 ; suivi de route +0x42D8 -> entree de la route
+# suivie (+0x80, identifiant en +0), point en cours (+0x60, mot)
+SOLDIER_POSITION, SOLDIER_FOLLOWER = 0x2D0, 0x42D8
+FOLLOWER_ROUTE, FOLLOWER_POINT = 0x80, 0x60
 STAGE_CODE = re.compile(r"s\d\da\d\d\w")
 
 
@@ -57,7 +67,7 @@ class GameLink:
         return struct.unpack("<Q", self.proc.read_bytes(address, 8))[0]
 
     def _transform(self) -> int:
-        _link, index_rva, table_rva, _dictionary = self.addresses
+        index_rva, table_rva = self.addresses[1], self.addresses[2]
         index = struct.unpack("<i", self.proc.read_bytes(self.base + index_rva, 4))[0]
         return self._q(self.base + table_rva + (index + 1) * PLAYER_ENTRY_SIZE + 8)
 
@@ -100,6 +110,40 @@ class GameLink:
             return found
         except OSError:
             return set()
+
+    def soldiers(self) -> list[dict]:
+        """Soldats de la zone : {"actor", "position", "route" (identifiant
+        suivi ou None), "point" (index du point vise)}. Lecture seule."""
+        if not self.proc:
+            return []
+        try:
+            manager = self._q(self.base + self.addresses[4])
+            if not manager:
+                return []
+            count = struct.unpack("<i", self.proc.read_bytes(manager + 0x30, 4))[0]
+            table = self._q(manager + 0x38)
+            if not table or not 0 < count < 512:
+                return []
+            block = self.proc.read_bytes(table, count * 0x10)
+            out = []
+            for i in range(count):
+                actor = struct.unpack_from("<Q", block, i * 0x10 + 8)[0]
+                if not actor:
+                    continue
+                position = struct.unpack("<3f", self.proc.read_bytes(actor + SOLDIER_POSITION, 12))
+                if not all(v == v and abs(v) < 1e7 for v in position):
+                    continue
+                route = point = None
+                follower = self._q(actor + SOLDIER_FOLLOWER)
+                if follower:
+                    entry = self._q(follower + FOLLOWER_ROUTE)
+                    if entry:
+                        route = struct.unpack("<I", self.proc.read_bytes(entry, 4))[0]
+                        point = struct.unpack("<H", self.proc.read_bytes(follower + FOLLOWER_POINT, 2))[0]
+                out.append({"actor": actor, "position": position, "route": route, "point": point})
+            return out
+        except OSError:
+            return []
 
     def teleport(self, x: float, y: float, z: float) -> bool:
         try:
