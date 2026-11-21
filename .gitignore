@@ -4,3 +4,5 @@ settings.json
 routes/
 build/
 dist/
+cache/
+zone_blocks.json
