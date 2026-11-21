@@ -2244,6 +2244,7 @@ class RouteEditor(QMainWindow):
             self.link_label.setText(f"●  Connecté au jeu · {here}")
             self._set_pill(True)
             self.snake = state.get("snake") if self.game_location and self.game_location[0] == self.zone else None
+            self.snake_yaw = state.get("yaw")
         self.draw_snake()
         here = bool(state and self.game_location and self.game_location[0] == self.zone)
         self.soldiers = self.link.soldiers() if here and self.layer_checks["soldiers"].isChecked() else []
@@ -2345,6 +2346,7 @@ class RouteEditor(QMainWindow):
             self._snake_item.setZValue(30)
             arrow = QGraphicsPolygonItem(QPolygonF([QPointF(0, -12), QPointF(9, 9), QPointF(0, 4), QPointF(-9, 9)]),
                                          self._snake_item)
+            self._snake_arrow = arrow
             arrow.setBrush(QBrush(QColor("#e6e9ef")))
             arrow.setPen(QPen(Qt.PenStyle.NoPen))
             label = QGraphicsSimpleTextItem("Snake", self._snake_item)
@@ -2356,6 +2358,9 @@ class RouteEditor(QMainWindow):
             self.scene.addItem(self._snake_item)
         self._snake_item.setVisible(True)
         self._snake_item.setPos(to_scene(self.snake[0], self.snake[2]))
+        # angle 0 = Z croissant = haut de la carte ; Qt tourne dans le sens horaire
+        yaw = getattr(self, "snake_yaw", None)
+        self._snake_arrow.setRotation(yaw if yaw is not None else 0.0)
 
     def cursor_moved(self, pos: QPointF):
         self.status_cursor.setText(f"Curseur ({pos.x():.0f}, {-pos.y():.0f})")

@@ -5,6 +5,7 @@ et les points de route modifies a la demande.
 
 Adresses relevees avec MGS4-Trainer, par version de l'exe (horodatage de
 l'en-tete PE). Version inconnue : rien n'est lu."""
+import math
 import re
 import struct
 
@@ -26,6 +27,10 @@ REFERENCE = (0x1C28B28, 0x23EB5150, 0x23EB5160, 0x23D2F6D0, 0x23F0B5B0, 0x234F48
 NAV_TYPE = 0x15  # type de ressource des .nv2
 STAGE_CODE_OFFSET, PROGRESS_OFFSET = 0x34, 0x54
 PLAYER_ENTRY_SIZE, TRANSFORM_POSITION = 0x80, 0x10
+# matrice de rotation de Snake (lignes de 16 octets) : m20 en +0x260, m22 en
+# +0x268 ; angle = atan2(m20, m22), 0 = Z croissant (releve 2026-11-21 : un
+# quart de tour a gauche fait passer l'angle de 2 a 90 degres)
+TRANSFORM_YAW_SIN, TRANSFORM_YAW_COS = 0x260, 0x268
 # soldat : position +0x2D0 ; suivi de route +0x42D8 -> entree de la route
 # suivie (+0x80, identifiant en +0), point en cours (+0x60, mot)
 SOLDIER_POSITION, SOLDIER_FOLLOWER = 0x2D0, 0x42D8
@@ -74,7 +79,8 @@ class GameLink:
         return self._q(self.base + table_rva + (index + 1) * PLAYER_ENTRY_SIZE + 8)
 
     def poll(self) -> dict | None:
-        """{"location": (code de zone, progression), "snake": (x, y, z) ou None}, None sans jeu."""
+        """{"location": (code de zone, progression), "snake": (x, y, z) ou None,
+        "yaw": angle de Snake en degres ou None}, None sans jeu."""
         for attempt in range(2):
             if self.proc is None and not self._attach():
                 return None
@@ -87,7 +93,13 @@ class GameLink:
                 progress = struct.unpack("<I", self.proc.read_bytes(link + PROGRESS_OFFSET, 4))[0]
                 transform = self._transform()
                 snake = struct.unpack("<3f", self.proc.read_bytes(transform + TRANSFORM_POSITION, 12)) if transform else None
-                return {"location": (code, progress), "snake": snake}
+                yaw = None
+                if transform:
+                    s = struct.unpack("<f", self.proc.read_bytes(transform + TRANSFORM_YAW_SIN, 4))[0]
+                    c = struct.unpack("<f", self.proc.read_bytes(transform + TRANSFORM_YAW_COS, 4))[0]
+                    if 0.9 < s * s + c * c < 1.1:
+                        yaw = math.degrees(math.atan2(s, c))
+                return {"location": (code, progress), "snake": snake, "yaw": yaw}
             except OSError:
                 self.close()  # jeu ferme ou relance : nouvel accrochage
         return None
