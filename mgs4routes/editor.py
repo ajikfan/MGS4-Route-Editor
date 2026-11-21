@@ -15,6 +15,7 @@ import json
 import math
 import os
 import re
+import struct
 import sys
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, Signal
@@ -49,6 +50,8 @@ ROUTE_COLORS = ("#f0883e", "#4ea1ff", "#3fb950", "#d2a8ff", "#e5c07b", "#56d4c2"
 ACTIONS = ("Marcher", "Courir", "S'arrêter et regarder", "S'accroupir")
 TOOLS = ("select", "point", "insert", "move", "delete")
 ACCENT = "#f0883e"
+POINT_SIZE = 0x30   # point de route en memoire (position en +0)
+HEIGHT_GAP = 1000   # ecart de hauteur (mm) avec un voisin au-dela duquel on previent
 MONO = "Consolas"
 # premiers caracteres du code de zone -> acte et region (affiche a cote du code)
 ACT_NAMES = {"s00": "Prologue", "s01": "Acte 1 · Moyen-Orient", "s02": "Acte 2 · Amérique du Sud",
@@ -110,6 +113,10 @@ QPushButton#seg { border-radius: 0; min-width: 40px; color: #a3adbb; }
 QPushButton#seg:checked { background: #2a3442; color: #ffffff; font-weight: 600; }
 QPushButton#zoom { background: transparent; border: none; padding: 8px; }
 QPushButton#zoom:hover { background: #1d232d; }
+QPushButton#live { color: #ffd2ad; border: 1px solid #5b3d22; }
+QPushButton#live:checked { background: #f0883e; color: #1a1006; font-weight: 700; border: none; }
+QPushButton#live:disabled { color: #5c6673; border-color: #232a33; background: #171c24; }
+QLabel#warn { color: #ffb86b; font-size: 12px; }
 QPushButton#outline { background: transparent; border: 1px solid #f0883e; color: #ffd2ad; font-weight: 600; }
 QPushButton#outline:disabled { border-color: #5b3d22; color: #8a7461; }
 QPushButton#primary { background: #f0883e; color: #1a1006; font-weight: 700; border: none; padding: 11px; font-size: 14px; border-radius: 8px; }
@@ -216,6 +223,36 @@ class PointItem(QGraphicsEllipseItem):
     def mouseReleaseEvent(self, event):
         super().mouseReleaseEvent(event)
         self.editor.point_released()
+
+
+class GameHandle(QGraphicsEllipseItem):
+    """Poignee d'un point de route du jeu en edition en direct."""
+
+    def __init__(self, editor):
+        super().__init__(-9, -9, 18, 18)
+        self.editor = editor
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges)
+        self.setBrush(QBrush(QColor(ACCENT)))
+        self.setPen(QPen(QColor("#ffffff"), 2))
+        self.setZValue(26)
+        self.setCursor(Qt.CursorShape.SizeAllCursor)
+        self.setToolTip("Glisser pour déplacer ce point dans le jeu")
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
+            self.editor.game_handle_moved(self.pos())
+        return super().itemChange(change, value)
+
+    def mousePressEvent(self, event):
+        self.editor.dragging_game_point = True
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        self.editor.dragging_game_point = False
+        QTimer.singleShot(0, self.editor.game_handle_released)
 
 
 class MapView(QGraphicsView):
@@ -390,9 +427,16 @@ class GameRouteRow(QWidget):
         label = QLabel(f"{ident:06X}")
         label.setStyleSheet(f"font-family: {MONO}; font-size: 12px; color: #c9d1dc;")
         row.addWidget(label, stretch=1)
+        self.mark = QLabel("modifiée")
+        self.mark.setStyleSheet("color: #f0883e; font-size: 11px; font-weight: 600;")
+        self.mark.hide()
+        row.addWidget(self.mark)
         pts = QLabel(f"{count} pts")
         pts.setStyleSheet("color: #8b95a3; font-size: 12px;")
         row.addWidget(pts)
+
+    def set_modified(self, on: bool):
+        self.mark.setVisible(on)
 
 
 class RouteEditor(QMainWindow):
@@ -510,6 +554,14 @@ class RouteEditor(QMainWindow):
             self.tool_buttons[key] = button
             row.addWidget(button)
         row.addStretch(1)
+        self.live_button = QPushButton("Édition en direct")
+        self.live_button.setObjectName("live")
+        self.live_button.setCheckable(True)
+        self.live_button.setEnabled(False)
+        self.live_button.setToolTip("Déplacer les points des routes du jeu pendant la partie.\n"
+                                    "Possible quand le jeu est dans la zone affichée.")
+        self.live_button.toggled.connect(self.set_live)
+        row.addWidget(self.live_button)
         self.link_label = QLabel("Jeu non connecté")
         self.link_label.setObjectName("pill")
         self.link_label.setProperty("off", True)
@@ -664,6 +716,31 @@ class RouteEditor(QMainWindow):
         assign.setObjectName("outline")
         assign.setEnabled(False)
         col.addWidget(assign)
+        self.live_warning = QLabel("")
+        self.live_warning.setObjectName("warn")
+        self.live_warning.setWordWrap(True)
+        self.live_warning.hide()
+        col.addWidget(self.live_warning)
+        self.live_box = QFrame()
+        self.live_box.setStyleSheet("QFrame { background: transparent; }")
+        box = QVBoxLayout(self.live_box)
+        box.setContentsMargins(0, 8, 0, 0)
+        box.setSpacing(6)
+        box.addWidget(_section("Routes du jeu modifiées"))
+        self.live_count = QLabel("")
+        self.live_count.setObjectName("hint")
+        self.live_count.setWordWrap(True)
+        box.addWidget(self.live_count)
+        buttons = QHBoxLayout()
+        self.restore_button = QPushButton("Rétablir la route")
+        self.restore_button.clicked.connect(lambda: self.restore_game_routes(current_only=True))
+        restore_all = QPushButton("Tout rétablir")
+        restore_all.clicked.connect(lambda: self.restore_game_routes(current_only=False))
+        buttons.addWidget(self.restore_button)
+        buttons.addWidget(restore_all)
+        box.addLayout(buttons)
+        self.live_box.hide()
+        col.addWidget(self.live_box)
         col.addStretch(1)
         inject = QPushButton("Injecter dans le jeu")
         inject.setObjectName("primary")
@@ -734,6 +811,7 @@ class RouteEditor(QMainWindow):
         self._soldier_items = []
         self._soldier_ring = None
         self.selected_soldier = None
+        self._handle = None
         self._game_items = {"grid": [], "walls": [], "routes": [], "markers": [], "objects": []}
         self._route_items = []
         self._highlight = None
@@ -742,6 +820,12 @@ class RouteEditor(QMainWindow):
         self._soldier_ring = None
         self.soldiers = []
         self.selected_soldier = None  # acteur suivi sur la carte
+        self.live = False
+        self.live_zone = None         # zone du jeu des sauvegardes ci-dessous
+        self.live_backup = {}         # identifiant -> (adresse, octets d'origine)
+        self.live_state = {}          # identifiant -> octets ecrits (attendus en memoire)
+        self.dragging_game_point = False
+        self._handle = None
         self.game_pick = None
         self._snake_item = None
         self.draw_game_layers()
@@ -783,29 +867,7 @@ class RouteEditor(QMainWindow):
             rect.setToolTip(f"Objet de collision {obj.ident:#08x} (forme {obj.shape})")
             rect.setZValue(-5)
             self._game_items["objects"].append(rect)
-        self._game_route_items = []
-        shown = self.visible_game_routes()
-        for route in g.routes:
-            group = []
-            self._game_route_items.append(group)
-            if not route.points:
-                continue
-            path = QPainterPath(to_scene(route.points[0].position[0], route.points[0].position[2]))
-            for p in route.points[1:]:
-                path.lineTo(to_scene(p.position[0], p.position[2]))
-            item = self.scene.addPath(path, cosmetic("#6b7685", 1.5, Qt.PenStyle.DashLine))
-            item.setToolTip(f"Route du jeu {route.ident:#08x} · {len(route.points)} points")
-            item.setZValue(0)
-            item.setData(0, route.ident)
-            group.append(item)
-            for p in route.points:
-                dot = self.scene.addEllipse(-3, -3, 6, 6, QPen(Qt.PenStyle.NoPen), QBrush(QColor("#8b95a3")))
-                dot.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
-                dot.setPos(to_scene(p.position[0], p.position[2]))
-                dot.setZValue(1)
-                group.append(dot)
-            for part in group:
-                part.setVisible(route.ident in shown)
+        self._game_route_items = [self.draw_game_route(route) for route in g.routes]
         for m in g.markers:
             cross = QPainterPath()
             cross.moveTo(-4, -4)
@@ -821,6 +883,184 @@ class RouteEditor(QMainWindow):
         for key, check in self.layer_checks.items():
             self.show_layer(key, check.isChecked())
 
+    def draw_game_route(self, route) -> list:
+        """Trace en pointille et points d'une route du jeu (orange si modifiee en direct)."""
+        group = []
+        if not route.points:
+            return group
+        modified = self.live_zone == self.zone and route.ident in self.live_backup
+        color = ACCENT if modified else "#6b7685"
+        path = QPainterPath(to_scene(route.points[0].position[0], route.points[0].position[2]))
+        for p in route.points[1:]:
+            path.lineTo(to_scene(p.position[0], p.position[2]))
+        item = self.scene.addPath(path, cosmetic(color, 2 if modified else 1.5, Qt.PenStyle.DashLine))
+        item.setToolTip(f"Route du jeu {route.ident:06X} · {len(route.points)} points" + (" · modifiée" if modified else ""))
+        item.setZValue(0)
+        item.setData(0, route.ident)
+        group.append(item)
+        for p in route.points:
+            dot = self.scene.addEllipse(-3, -3, 6, 6, QPen(Qt.PenStyle.NoPen), QBrush(QColor(color if modified else "#8b95a3")))
+            dot.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
+            dot.setPos(to_scene(p.position[0], p.position[2]))
+            dot.setZValue(1)
+            group.append(dot)
+        shown = (route.ident in self.visible_game_routes() or modified) and self.layer_checks["routes"].isChecked()
+        for part in group:
+            part.setVisible(shown)
+        return group
+
+    def redraw_game_route(self, index: int):
+        for part in self._game_route_items[index]:
+            self.scene.removeItem(part)
+        self._game_route_items[index] = self.draw_game_route(self.geom.routes[index])
+        if self.game_list.currentRow() == index:
+            self.highlight_game_route(index, center=False)
+            self.draw_pick()
+
+    # -------------------------------------------------- edition en direct des routes du jeu
+    def live_allowed(self) -> bool:
+        return bool(self.game_location and self.game_location[0] == self.zone)
+
+    def set_live(self, on: bool):
+        self.live = on and self.live_allowed()
+        if self.live_button.isChecked() != self.live:
+            self.live_button.blockSignals(True)
+            self.live_button.setChecked(self.live)
+            self.live_button.blockSignals(False)
+        self.draw_pick()
+        self.show_point()
+
+    def live_check_zone(self):
+        """Appele a chaque releve : le jeu a quitte la zone des sauvegardes ->
+        ses routes ont ete rechargees depuis les fichiers, plus rien a retablir."""
+        game_zone = self.game_location[0] if self.game_location else None
+        if self.live_backup and game_zone != self.live_zone:
+            self.live_backup, self.live_state, self.live_zone = {}, {}, None
+            if self.geom is not None and self.zone == self._geom_zone_of_backup:
+                self.reload_geom_routes()
+            self.update_live_box()
+        allowed = self.live_allowed()
+        self.live_button.setEnabled(allowed)
+        if self.live and not allowed:
+            self.set_live(False)
+
+    def reload_geom_routes(self):
+        """Positions des routes du jeu relues depuis le fichier de la zone."""
+        fresh = geomlib.parse(self.files.read(self.geoms[self.zone]))
+        self.geom.routes = fresh.routes
+        for index in range(len(self.geom.routes)):
+            self.redraw_game_route(index)
+
+    def write_game_point(self, r: int, i: int, position) -> bool:
+        """Ecrit la position d'un point d'une route du jeu, apres verification :
+        la route est a la meme adresse et la memoire contient ce qu'on attend."""
+        route = self.geom.routes[r]
+        location = self.link.route_location(route.ident)
+        if location is None or location[1] != len(route.points):
+            self.live_message(f"Route {route.ident:06X} introuvable en mémoire : rien n'est écrit.")
+            return False
+        address, total = location
+        current = self.link.read_points(address, total)
+        if current is None:
+            return False
+        if route.ident not in self.live_backup:
+            if not self.live_backup:
+                self.live_zone = self.zone
+                self._geom_zone_of_backup = self.zone
+            self.live_backup[route.ident] = (address, current)
+            self.live_state[route.ident] = current
+        if self.live_backup[route.ident][0] != address or current != self.live_state[route.ident]:
+            self.live_message(f"La route {route.ident:06X} a changé en mémoire (rechargée par le jeu ?) : rien n'est écrit.")
+            return False
+        data = struct.pack("<3f", *position)
+        if not self.link.write_bytes(address + POINT_SIZE * i, data):
+            self.live_message("Écriture refusée par le jeu.")
+            return False
+        state = bytearray(current)
+        state[POINT_SIZE * i:POINT_SIZE * i + 12] = data
+        self.live_state[route.ident] = bytes(state)
+        route.points[i].position = tuple(float(v) for v in position)
+        self.height_warning(r, i)
+        self.update_live_box()
+        return True
+
+    def height_warning(self, r: int, i: int):
+        pts = self.geom.routes[r].points
+        y = pts[i].position[1]
+        gaps = [abs(y - pts[k].position[1]) for k in (i - 1, i + 1) if 0 <= k < len(pts)]
+        if gaps and max(gaps) > HEIGHT_GAP:
+            self.live_message(f"Attention : {max(gaps) / 1000:.1f} m de différence de hauteur avec un point voisin. "
+                              "Le soldat risque de ne pas trouver de chemin.")
+        else:
+            self.live_message("")
+
+    def live_message(self, text: str):
+        self.live_warning.setText(text)
+        self.live_warning.setVisible(bool(text))
+
+    def game_handle_moved(self, pos: QPointF):
+        if self._pick_item is not None:
+            self._pick_item.setPos(pos)
+        for key, value in (("x", pos.x()), ("z", -pos.y())):
+            self.coord[key].blockSignals(True)
+            self.coord[key].setValue(value)
+            self.coord[key].blockSignals(False)
+
+    def game_handle_released(self):
+        if self.game_pick is None or self._handle is None:
+            return
+        r, i = self.game_pick
+        pos = self._handle.pos()
+        y = self.geom.routes[r].points[i].position[1]
+        self.write_game_point(r, i, (round(pos.x()), y, round(-pos.y())))
+        self.redraw_game_route(r)
+        self.show_point()
+
+    def update_live_box(self):
+        modified = sorted(self.live_backup) if self.live_zone == self.zone else []
+        self.live_box.setVisible(bool(modified))
+        self.live_count.setText(", ".join(f"{ident:06X}" for ident in modified))
+        current = self.geom.routes[self.game_pick[0]].ident if self.game_pick else None
+        self.restore_button.setEnabled(current in self.live_backup)
+        for index, route in enumerate(self.geom.routes if self.geom else []):
+            item = self.game_list.item(index)
+            row = self.game_list.itemWidget(item) if item else None
+            if row is not None:
+                row.set_modified(route.ident in modified)
+
+    def restore_game_routes(self, current_only: bool):
+        if current_only:
+            if not self.game_pick:
+                return
+            idents = [self.geom.routes[self.game_pick[0]].ident]
+        else:
+            idents = list(self.live_backup)
+        failed = []
+        for ident in idents:
+            if ident not in self.live_backup:
+                continue
+            address, original = self.live_backup[ident]
+            location = self.link.route_location(ident)
+            current = self.link.read_points(address, len(original) // POINT_SIZE) if location else None
+            # seule la route telle qu'on l'a laissee est remise ; sinon le jeu l'a rechargee
+            if location and location[0] == address and current == self.live_state[ident]:
+                if not self.link.write_bytes(address, original):
+                    failed.append(ident)
+                    continue
+            del self.live_backup[ident]
+            del self.live_state[ident]
+        if not self.live_backup:
+            self.live_zone = None
+        # positions d'origine dans la carte
+        fresh = {r.ident: r for r in geomlib.parse(self.files.read(self.geoms[self.zone])).routes}
+        for index, route in enumerate(self.geom.routes):
+            if route.ident in idents and route.ident in fresh and route.ident not in failed:
+                self.geom.routes[index] = fresh[route.ident]
+                self.redraw_game_route(index)
+        self.live_message("Échec pour " + ", ".join(f"{i:06X}" for i in failed) if failed else "")
+        self.update_live_box()
+        self.show_point()
+
     # -------------------------------------------------- visibilite des routes du jeu (par zone, gardee)
     def visible_game_routes(self) -> set[int]:
         """Routes du jeu cochees dans cette zone (aucune par defaut)."""
@@ -834,9 +1074,10 @@ class RouteEditor(QMainWindow):
     def apply_game_route_visibility(self):
         shown = self.visible_game_routes()
         layer = self.layer_checks["routes"].isChecked()
+        modified = set(self.live_backup) if self.live_zone == self.zone else set()
         for route, group in zip(self.geom.routes, self._game_route_items):
             for part in group:
-                part.setVisible(layer and route.ident in shown)
+                part.setVisible(layer and (route.ident in shown or route.ident in modified))
 
     def toggle_game_route(self, index: int, on: bool):
         shown = self.visible_game_routes()
@@ -977,6 +1218,7 @@ class RouteEditor(QMainWindow):
             self.game_list.addItem(item)
             self.game_list.setItemWidget(item, row)
         self.game_list.blockSignals(False)
+        self.update_live_box()
 
     # -------------------------------------------------- routes de l'utilisateur
     def read_routes(self, zone: str) -> list[dict]:
@@ -1151,9 +1393,14 @@ class RouteEditor(QMainWindow):
         self.show_point()
 
     def draw_pick(self):
+        if self.dragging_game_point:
+            return
         if self._pick_item is not None:
             self.scene.removeItem(self._pick_item)
             self._pick_item = None
+        if self._handle is not None:
+            self.scene.removeItem(self._handle)
+            self._handle = None
         if self.game_pick is None:
             return
         r, i = self.game_pick
@@ -1165,6 +1412,10 @@ class RouteEditor(QMainWindow):
         self._pick_item.setPos(to_scene(pos[0], pos[2]))
         self._pick_item.setZValue(25)
         self.scene.addItem(self._pick_item)
+        if self.live and self.tool in ("select", "move"):
+            self._handle = GameHandle(self)
+            self._handle.setPos(to_scene(pos[0], pos[2]))
+            self.scene.addItem(self._handle)
 
     def show_game_point(self):
         r, i = self.game_pick
@@ -1172,7 +1423,11 @@ class RouteEditor(QMainWindow):
         pt = route.points[i]
         self.enable_point_panel(False)
         self.loop_check.setEnabled(False)
-        self.point_title.setText(f"Point {i + 1} / {len(route.points)} · route du jeu {route.ident:06X} (lecture seule)")
+        state = "modifiable en direct" if self.live else "lecture seule"
+        self.point_title.setText(f"Point {i + 1} / {len(route.points)} · route du jeu {route.ident:06X} ({state})")
+        for spin in self.coord.values():
+            spin.setEnabled(self.live)
+        self.update_live_box()
         widgets = (*self.coord.values(), self.look_spin)
         for widget in widgets:
             widget.blockSignals(True)
@@ -1189,6 +1444,7 @@ class RouteEditor(QMainWindow):
         self.tool = tool
         self.tool_buttons[tool].setChecked(True)
         self.view.set_hint(TOOL_HINTS[tool])
+        self.draw_pick()
         self.redraw_routes()
 
     def center_on_snake(self):
@@ -1207,6 +1463,8 @@ class RouteEditor(QMainWindow):
 
     def map_clicked(self, scene_pos: QPointF, modifiers, item):
         x, z = scene_pos.x(), -scene_pos.y()
+        if isinstance(item, GameHandle):
+            return
         point = item if isinstance(item, PointItem) else None
         if point is None and self.tool in ("select", "move", "delete"):
             soldier = self.pick_soldier(scene_pos)
@@ -1218,6 +1476,7 @@ class RouteEditor(QMainWindow):
                 return
             hit = self.pick_game_point(scene_pos)
             if hit:
+                self.selected_soldier = None
                 self.select_game_point(*hit)
                 return
         self.selected_soldier = None
@@ -1324,6 +1583,13 @@ class RouteEditor(QMainWindow):
         self.snake_button.setEnabled(self.snake is not None)
 
     def edit_point(self, key: str, value):
+        if self.live and self.game_pick is not None and self.selected == -1 and key in ("x", "y", "z"):
+            r, i = self.game_pick
+            position = list(self.geom.routes[r].points[i].position)
+            position["xyz".index(key)] = round(value)
+            if self.write_game_point(r, i, position):
+                self.redraw_game_route(r)
+            return
         route = self.route()
         if not route or not 0 <= self.selected < len(route["points"]):
             return
@@ -1386,7 +1652,8 @@ class RouteEditor(QMainWindow):
         self.draw_snake()
         here = bool(state and self.game_location and self.game_location[0] == self.zone)
         self.soldiers = self.link.soldiers() if here and self.layer_checks["soldiers"].isChecked() else []
-        if self.selected_soldier is not None:
+        self.live_check_zone()
+        if self.selected_soldier is not None and not self.dragging_game_point:
             self.follow_soldier()
         self.draw_soldiers()
         self.update_status()
@@ -1513,6 +1780,11 @@ class RouteEditor(QMainWindow):
 
     def closeEvent(self, event):
         self.save_routes()
+        if self.live_backup and self.game_location and self.game_location[0] == self.live_zone:
+            answer = QMessageBox.question(self, "Routes du jeu modifiées",
+                                          "Rétablir les routes du jeu modifiées avant de quitter ?")
+            if answer == QMessageBox.StandardButton.Yes:
+                self.restore_game_routes(current_only=False)
         super().closeEvent(event)
 
 

@@ -1,6 +1,7 @@
 """Lien avec le jeu en cours (facultatif) : zone, position de Snake,
-soldats et routes suivies, teleportation de Snake. Lecture seule, sauf
-la position de Snake.
+soldats et routes suivies, teleportation de Snake, edition en direct
+des points des routes chargees. Lecture seule, sauf la position de Snake
+et les points de route modifies a la demande.
 
 Adresses relevees avec MGS4-Trainer, par version de l'exe (horodatage de
 l'en-tete PE). Version inconnue : rien n'est lu."""
@@ -29,6 +30,7 @@ PLAYER_ENTRY_SIZE, TRANSFORM_POSITION = 0x80, 0x10
 # suivie (+0x80, identifiant en +0), point en cours (+0x60, mot)
 SOLDIER_POSITION, SOLDIER_FOLLOWER = 0x2D0, 0x42D8
 FOLLOWER_ROUTE, FOLLOWER_POINT = 0x80, 0x60
+ROUTE_POINT_SIZE = 0x30  # position (3 flottants) en +0
 STAGE_CODE = re.compile(r"s\d\da\d\d\w")
 
 
@@ -144,6 +146,42 @@ class GameLink:
             return out
         except OSError:
             return []
+
+    # -------------------------------------------------- routes chargees (edition en direct)
+    def route_location(self, ident: int) -> tuple[int, int] | None:
+        """(adresse des points, nombre de points) d'une route chargee, sinon None."""
+        if not self.proc:
+            return None
+        try:
+            count = struct.unpack("<i", self.proc.read_bytes(self.base + self.addresses[5], 4))[0]
+            table = self._q(self.base + self.addresses[5] + 8)
+            offsets = self._q(self.base + self.addresses[6])
+            if not table or not offsets or not 0 < count < 0x4000:
+                return None
+            raw = self.proc.read_bytes(table, 0x10 * count)
+            for i in range(count):
+                name, _unused, total, offset = struct.unpack_from("<IIII", raw, 0x10 * i)
+                if name == ident and offset and 0 < total < 0x400:
+                    return offsets + offset, total
+        except OSError:
+            pass
+        return None
+
+    def read_points(self, address: int, total: int) -> bytes | None:
+        try:
+            return self.proc.read_bytes(address, ROUTE_POINT_SIZE * total) if self.proc else None
+        except OSError:
+            return None
+
+    def write_bytes(self, address: int, data: bytes) -> bool:
+        """Ecriture brute (appelee seulement apres verification par l'editeur)."""
+        try:
+            if not self.proc:
+                return False
+            self.proc.write_bytes(address, data)
+            return self.proc.read_bytes(address, len(data)) == data
+        except OSError:
+            return False
 
     def teleport(self, x: float, y: float, z: float) -> bool:
         try:
