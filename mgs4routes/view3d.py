@@ -2,8 +2,8 @@
 
 Murs des .nv2 extrudes (pied + hauteur), routes et points, soldats et
 Snake. Coordonnees du jeu en millimetres (Y vers le haut) ; la vue
-travaille en metres, avec Z inverse pour que, vu du dessus, le nord soit
-en haut comme sur la carte 2D.
+travaille en metres, avec X et Z inverses pour que, vu du dessus, l'image
+soit celle du jeu (comme la carte 2D).
 
 Souris : glisser (gauche) = tourner, glisser (droit ou milieu) = deplacer,
 molette = zoom, double-clic = recentrer sur le point vise."""
@@ -48,7 +48,7 @@ LIGHT = LIGHT / np.linalg.norm(LIGHT)
 
 def gl_point(x: float, y: float, z: float) -> tuple[float, float, float]:
     """Jeu (mm) -> vue (m)."""
-    return x / 1000.0, y / 1000.0, -z / 1000.0
+    return -x / 1000.0, y / 1000.0, -z / 1000.0
 
 
 def _rgba(color, alpha: float = 1.0) -> tuple[float, float, float, float]:
@@ -104,7 +104,7 @@ def wall_meshes(walls, ground: float | None = None, cut: float | None = None) ->
     if not walls:
         return np.zeros((0, 7), np.float32), np.zeros((0, 7), np.float32)
     w = np.asarray(walls, dtype=np.float64)
-    x1, z1, x2, z2 = w[:, 0] / 1000, -w[:, 1] / 1000, w[:, 2] / 1000, -w[:, 3] / 1000
+    x1, z1, x2, z2 = -w[:, 0] / 1000, -w[:, 1] / 1000, -w[:, 2] / 1000, -w[:, 3] / 1000
     y0 = w[:, 4] / 1000
     y1 = y0 + w[:, 5] / 1000
     if cut is not None and ground is not None:
@@ -143,7 +143,8 @@ def decor_mesh(tris) -> np.ndarray:
     if tris is None or not len(tris):
         return np.zeros((0, 7), np.float32)
     t = np.asarray(tris, dtype=np.float64) / 1000.0
-    t[:, :, 2] *= -1.0  # Z inverse (nord en haut)
+    t[:, :, 0] *= -1.0  # X et Z inverses : vu de dessus, comme dans le jeu
+    t[:, :, 2] *= -1.0
     n = np.cross(t[:, 1] - t[:, 0], t[:, 2] - t[:, 0])
     n /= np.maximum(np.linalg.norm(n, axis=1, keepdims=True), 1e-9)
     light = np.array((0.35, 0.85, 0.40))
@@ -174,7 +175,7 @@ def floor_mesh(floors) -> np.ndarray:
     for poly, y in floors:
         t = (y - low) / span
         color = (0.13 + 0.16 * t, 0.19 + 0.17 * t, 0.26 + 0.16 * t, 1.0)  # plus clair en hauteur
-        pts = [(x / 1000.0, y / 1000.0, -z / 1000.0) for x, z in poly]
+        pts = [(-x / 1000.0, y / 1000.0, -z / 1000.0) for x, z in poly]
         for a, b in zip(pts[1:], pts[2:]):
             rows += [(*pts[0], *color), (*a, *color), (*b, *color)]
     return np.array(rows, np.float32)
@@ -237,7 +238,7 @@ class View3D(QOpenGLWidget):
             self.grid.set(np.zeros((0, 7), np.float32))
             return
         w = np.asarray(walls, dtype=np.float64)
-        x0, x1 = w[:, [0, 2]].min() / 1000, w[:, [0, 2]].max() / 1000
+        x0, x1 = -w[:, [0, 2]].max() / 1000, -w[:, [0, 2]].min() / 1000
         z0, z1 = -w[:, [1, 3]].max() / 1000, -w[:, [1, 3]].min() / 1000
         step = 10.0
         y = ground / 1000 - 0.02
