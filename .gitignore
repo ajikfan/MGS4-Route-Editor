@@ -6,3 +6,6 @@ build/
 dist/
 cache/
 zone_blocks.json
+action_names.json
+flag_names.json
+anim_support.json
