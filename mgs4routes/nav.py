@@ -17,6 +17,8 @@ import json
 import os
 import struct
 
+import numpy as np
+
 RECORD = 44
 
 
@@ -50,6 +52,34 @@ def walls(data: bytes) -> list[tuple[float, float, float, float, float, float]]:
             o += RECORD
         else:
             o += 4
+    return out
+
+
+def crossed_by(segments, paths, max_step: float = 20000.0) -> list[bool]:
+    """Pour chaque segment de mur, vrai s'il est coupe par un pas d'une
+    route (deux points consecutifs a moins de max_step mm).
+
+    Les segments des .nv2 sont en fait les lignes de decoupe de la
+    navigation : la plupart suivent un vrai mur, d'autres ne font que
+    partager le sol praticable (un soldat les traverse, s01a57l
+    2026-11-21). Un segment traverse par une route du jeu ne bloque donc
+    rien a cet endroit."""
+    steps = [(a[0], a[2], b[0], b[2]) for path in paths for a, b in zip(path, path[1:])
+             if 1.0 < ((a[0] - b[0]) ** 2 + (a[2] - b[2]) ** 2) ** 0.5 <= max_step]
+    if not segments or not steps:
+        return [False] * len(segments)
+    walls = np.asarray([s[:4] for s in segments], dtype=np.float64)
+    route = np.asarray(steps, dtype=np.float64)
+    cx, cz, dx, dz = (route[:, k][None, :] for k in range(4))
+    out = []
+    for start in range(0, len(walls), 400):
+        w = walls[start:start + 400]
+        ax, az, bx, bz = (w[:, k][:, None] for k in range(4))
+        o1 = (bx - ax) * (cz - az) - (bz - az) * (cx - ax)
+        o2 = (bx - ax) * (dz - az) - (bz - az) * (dx - ax)
+        o3 = (dx - cx) * (az - cz) - (dz - cz) * (ax - cx)
+        o4 = (dx - cx) * (bz - cz) - (dz - cz) * (bx - cx)
+        out += ((o1 * o2 < 0) & (o3 * o4 < 0)).any(axis=1).tolist()
     return out
 
 

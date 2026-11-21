@@ -24,12 +24,13 @@ from PySide6.QtWidgets import (
     QAbstractSpinBox, QApplication, QButtonGroup, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFrame,
     QGraphicsEllipseItem, QGraphicsItem, QGraphicsPathItem, QGraphicsPolygonItem, QGraphicsScene,
     QGraphicsSimpleTextItem, QGraphicsView, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QListWidget,
-    QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPushButton, QSpinBox, QVBoxLayout, QWidget,
+    QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPushButton, QSpinBox, QStackedWidget, QVBoxLayout, QWidget,
 )
 
 from mgs4routes import geom as geomlib
 from mgs4routes.game import NAV_TYPE, GameLink
-from mgs4routes.nav import NavIndex
+from mgs4routes.nav import NavIndex, crossed_by
+from mgs4routes.view3d import View3D
 from mgs4routes.vpak import STAGE_ARCHIVES, StageFiles
 
 STAGE_CODE = re.compile(r"s\d\da\d\d\w")
@@ -53,6 +54,9 @@ TOOLS = ("select", "point", "insert", "move", "delete")
 ACCENT = "#f0883e"
 POINT_SIZE = 0x30   # point de route en memoire (position en +0)
 HEIGHT_GAP = 1000   # ecart de hauteur (mm) avec un voisin au-dela duquel on previent
+# Murs de limite de zone : pied a -6 m (sous le terrain), 12 a 26 m de haut,
+# souvent tres longs (murs invisibles des bords de carte, s01a57l)
+BOUNDARY_FOOT = -5000
 # Champs d'un point de route du jeu (voir geom.RoutePoint) : decalage, format
 POINT_FIELDS = {"flags": (0x0C, "<I"), "action": (0x1C, "<H"), "move": (0x1E, "<H"),
                 "wait": (0x20, "<H"), "angle": (0x22, "<H")}
@@ -466,9 +470,28 @@ class RouteEditor(QMainWindow):
         self.snake = None
         self.game_location = None
         self._building = False
-        self._game_items = {"grid": [], "walls": [], "routes": [], "markers": [], "objects": []}
+        self._game_items = {"grid": [], "walls": [], "limits": [], "passages": [], "routes": [], "markers": [], "objects": []}
         self._route_items = []
         self._highlight = None
+        self._pick_item = None
+        self._handle = None
+        self._soldier_items = []
+        self._soldier_ring = None
+        self._snake_item = None
+        self.game_pick = None
+        self.soldiers = []
+        self.selected_soldier = None  # acteur suivi sur la carte
+        self.dragging_game_point = False
+        # edition en direct : gardee quand on change de zone affichee (le jeu,
+        # lui, garde les routes modifiees tant qu'il reste dans sa zone)
+        self.live = False
+        self.live_zone = None         # zone du jeu des sauvegardes ci-dessous
+        self.live_backup = {}         # identifiant -> (adresse, octets d'origine)
+        self.live_state = {}          # identifiant -> octets ecrits (attendus en memoire)
+        self._geom_zone_of_backup = None
+        self.wall_segments, self.limit_segments, self.passage_segments = [], [], []
+        self.walls_3d_dirty = True
+        self._3d_pending = False
 
         self.scene = QGraphicsScene(self)
         self.view = MapView(self.scene)
@@ -486,7 +509,12 @@ class RouteEditor(QMainWindow):
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
         body.addWidget(self._build_left())
-        body.addWidget(self.view, stretch=1)
+        self.view3d = View3D()
+        self.view3d.status.connect(self.live_message)
+        self.map_stack = QStackedWidget()
+        self.map_stack.addWidget(self.view)
+        self.map_stack.addWidget(self.view3d)
+        body.addWidget(self.map_stack, stretch=1)
         body.addWidget(self._build_right())
         outer.addLayout(body, stretch=1)
         self.setCentralWidget(root)
@@ -537,14 +565,18 @@ class RouteEditor(QMainWindow):
         seg_row = QHBoxLayout(seg)
         seg_row.setContentsMargins(0, 0, 0, 0)
         seg_row.setSpacing(0)
-        for text, on in (("2D", True), ("3D", False)):
+        self.mode_group = QButtonGroup(self)
+        self.mode_group.setExclusive(True)
+        for text, tip in (("2D", "Carte de dessus : édition des routes"),
+                          ("3D", "Vue 3D : murs, routes, soldats (glisser = tourner, clic droit = déplacer, molette = zoom)")):
             button = QPushButton(text)
             button.setObjectName("seg")
             button.setCheckable(True)
-            button.setChecked(on)
-            button.setEnabled(on)
-            button.setToolTip("" if on else "À venir")
+            button.setChecked(text == "2D")
+            button.setToolTip(tip)
             button.setStyleSheet("border: none;")
+            button.clicked.connect(lambda _c=False, t=text: self.set_mode(t))
+            self.mode_group.addButton(button)
             seg_row.addWidget(button)
         row.addWidget(seg)
         row.addWidget(_separator(True))
@@ -631,10 +663,11 @@ class RouteEditor(QMainWindow):
         lay.addWidget(_section("Calques"))
         self.layer_checks = {}
         for key, text in (("soldiers", "Soldats (en direct)"), ("walls", "Murs et obstacles"),
+                          ("passages", "Passages (traversés par une route)"), ("limits", "Limites de la zone"),
                           ("grid", "Grille de la zone"), ("routes", "Routes du jeu"),
                           ("markers", "Repères"), ("objects", "Objets de collision")):
             check = QCheckBox(text)
-            check.setChecked(key != "objects")
+            check.setChecked(key not in ("objects", "limits", "passages"))
             check.toggled.connect(lambda on, k=key: self.show_layer(k, on))
             self.layer_checks[key] = check
             lay.addWidget(check)
@@ -998,20 +1031,13 @@ class RouteEditor(QMainWindow):
         self._soldier_ring = None
         self.selected_soldier = None
         self._handle = None
-        self._game_items = {"grid": [], "walls": [], "routes": [], "markers": [], "objects": []}
+        self._game_items = {"grid": [], "walls": [], "limits": [], "passages": [], "routes": [], "markers": [], "objects": []}
         self._route_items = []
         self._highlight = None
         self._pick_item = None
-        self._soldier_items = []
-        self._soldier_ring = None
-        self.soldiers = []
-        self.selected_soldier = None  # acteur suivi sur la carte
-        self.live = False
-        self.live_zone = None         # zone du jeu des sauvegardes ci-dessous
-        self.live_backup = {}         # identifiant -> (adresse, octets d'origine)
-        self.live_state = {}          # identifiant -> octets ecrits (attendus en memoire)
         self.dragging_game_point = False
-        self._handle = None
+        self.wall_segments, self.limit_segments = [], []
+        self.walls_3d_dirty = True
         self.game_pick = None
         self._snake_item = None
         self.draw_game_layers()
@@ -1096,12 +1122,91 @@ class RouteEditor(QMainWindow):
         return group
 
     def redraw_game_route(self, index: int):
+        self.schedule_3d()
         for part in self._game_route_items[index]:
             self.scene.removeItem(part)
         self._game_route_items[index] = self.draw_game_route(self.geom.routes[index])
         if self.game_list.currentRow() == index:
             self.highlight_game_route(index, center=False)
             self.draw_pick()
+
+    # -------------------------------------------------- vue 3D
+    def set_mode(self, mode: str):
+        for button in self.mode_group.buttons():
+            button.setChecked(button.text() == mode)
+        if mode == "3D":
+            self.map_stack.setCurrentWidget(self.view3d)
+            center = self.view.mapToScene(self.view.viewport().rect().center())
+            ground = self.ground_height()
+            self.view3d.look_at(center.x(), ground, -center.y())
+            self.walls_3d_dirty = True
+            self.refresh_3d()
+            self.view.hint.hide()
+        else:
+            self.map_stack.setCurrentWidget(self.view)
+            self.view.hint.show()
+
+    def ground_height(self) -> float:
+        """Hauteur la plus frequente des points de route (le sol de la zone)."""
+        if self.snake:
+            return self.snake[1]
+        heights = [round(p.position[1], -2) for r in (self.geom.routes if self.geom else []) for p in r.points]
+        return max(set(heights), key=heights.count) if heights else 0.0
+
+    def schedule_3d(self):
+        """Mise a jour de la 3D apres l'evenement en cours (regroupe les appels)."""
+        if self._3d_pending or self.map_stack.currentWidget() is not self.view3d:
+            return
+        self._3d_pending = True
+        QTimer.singleShot(0, self.refresh_3d)
+
+    def refresh_3d(self):
+        self._3d_pending = False
+        if self.map_stack.currentWidget() is not self.view3d or self.geom is None:
+            return
+        if self.walls_3d_dirty:
+            walls = list(self.wall_segments) if self.layer_checks["walls"].isChecked() else []
+            if self.layer_checks["limits"].isChecked():
+                walls += self.limit_segments
+            if self.layer_checks["passages"].isChecked():
+                walls += self.passage_segments
+            self.view3d.set_walls(walls, self.ground_height())
+            self.walls_3d_dirty = False
+        polylines, markers = [], []
+        if self.layer_checks["routes"].isChecked():
+            shown = self.visible_game_routes()
+            modified = set(self.live_backup) if self.live_zone == self.zone else set()
+            current = self.game_list.currentRow()
+            for index, route in enumerate(self.geom.routes):
+                if not route.points:
+                    continue
+                if index == current:
+                    color = "#ffffff"
+                elif route.ident in modified:
+                    color = ACCENT
+                elif route.ident in shown:
+                    color = "#8b95a3"
+                else:
+                    continue
+                polylines.append(([p.position for p in route.points], color, True))
+        for r_index, route in enumerate(self.routes):
+            if route.get("hidden") and r_index != self.current:
+                continue
+            pts = [(p["x"], p["y"], p["z"]) for p in route["points"]]
+            if route.get("loop") and len(pts) > 2:
+                pts.append(pts[0])
+            polylines.append((pts, route["color"], True))
+        if self.game_pick is not None:
+            r, i = self.game_pick
+            markers.append((self.geom.routes[r].points[i].position, "#ffffff", 0.9))
+        if self.layer_checks["soldiers"].isChecked():
+            for soldier in self.soldiers:
+                chosen = soldier["actor"] == self.selected_soldier
+                color = ACCENT if chosen else ("#ff5c5c" if soldier["route"] else "#8b95a3")
+                markers.append((soldier["position"], color, 1.8))
+        if self.snake:
+            markers.append((self.snake, "#e6e9ef", 1.8))
+        self.view3d.set_overlay(polylines, markers)
 
     # -------------------------------------------------- edition en direct des routes du jeu
     def live_allowed(self) -> bool:
@@ -1265,6 +1370,7 @@ class RouteEditor(QMainWindow):
         _save_setting("route_editor_visible", data)
 
     def apply_game_route_visibility(self):
+        self.schedule_3d()
         shown = self.visible_game_routes()
         layer = self.layer_checks["routes"].isChecked()
         modified = set(self.live_backup) if self.live_zone == self.zone else set()
@@ -1318,23 +1424,36 @@ class RouteEditor(QMainWindow):
         return self.nav.covering((x0 - mx, z0 - mz, x1 + mx, z1 + mz)), "automatique"
 
     def draw_walls(self):
-        for item in self._game_items["walls"]:
-            self.scene.removeItem(item)
-        self._game_items["walls"] = []
+        for key in ("walls", "limits", "passages"):
+            for item in self._game_items[key]:
+                self.scene.removeItem(item)
+            self._game_items[key] = []
         paths, source = self.zone_blocks()
-        lines = QPainterPath()
-        count = 0
+        self.wall_segments, self.limit_segments = [], []
         for path in paths:
-            for x1, z1, x2, z2, _y, _h in self.nav.walls(path):
+            for wall in self.nav.walls(path):
+                (self.limit_segments if wall[4] <= BOUNDARY_FOOT else self.wall_segments).append(wall)
+        # segments traverses par une route du jeu : decoupes du sol, pas des murs
+        crossed = crossed_by(self.wall_segments, [[p.position for p in r.points] for r in self.geom.routes])
+        self.passage_segments = [w for w, c in zip(self.wall_segments, crossed) if c]
+        self.wall_segments = [w for w, c in zip(self.wall_segments, crossed) if not c]
+        for key, segments, pen, z in (("walls", self.wall_segments, cosmetic("#d7dde6", 1.2), -6),
+                                      ("passages", self.passage_segments, cosmetic("#5f8f6b", 1, Qt.PenStyle.DotLine), -7),
+                                      ("limits", self.limit_segments, cosmetic("#7d8794", 1, Qt.PenStyle.DashLine), -7)):
+            lines = QPainterPath()
+            for x1, z1, x2, z2, _y, _h in segments:
                 lines.moveTo(to_scene(x1, z1))
                 lines.lineTo(to_scene(x2, z2))
-                count += 1
-        item = self.scene.addPath(lines, cosmetic("#d7dde6", 1.2))
-        item.setZValue(-6)
-        item.setVisible(self.layer_checks["walls"].isChecked())
-        self._game_items["walls"].append(item)
+            item = self.scene.addPath(lines, pen)
+            item.setZValue(z)
+            item.setVisible(self.layer_checks[key].isChecked())
+            self._game_items[key].append(item)
+        count = len(self.wall_segments)
+        self.walls_3d_dirty = True
+        self.schedule_3d()
         names = ", ".join(p.split("/")[-1][:8] for p in paths[:6]) + ("…" if len(paths) > 6 else "")
-        text = f"Carte : {len(paths)} bloc(s), {count} murs · {source}"
+        text = (f"Carte : {len(paths)} bloc(s), {count} murs, {len(self.passage_segments)} passages, "
+                f"{len(self.limit_segments)} limites · {source}")
         self.blocks_label.setText(text + ("\n" + names if paths else ""))
 
     def learn_blocks(self):
@@ -1360,6 +1479,9 @@ class RouteEditor(QMainWindow):
         self.draw_walls()
 
     def show_layer(self, key: str, on: bool):
+        if key in ("walls", "limits", "passages"):
+            self.walls_3d_dirty = True
+        self.schedule_3d()
         if key == "soldiers":
             for item in getattr(self, "_soldier_items", ()):
                 item.setVisible(on)
@@ -1503,6 +1625,7 @@ class RouteEditor(QMainWindow):
         return self.routes[self.current] if 0 <= self.current < len(self.routes) else None
 
     def redraw_routes(self):
+        self.schedule_3d()
         self._building = True
         for item in self._route_items:
             self.scene.removeItem(item)
@@ -1532,6 +1655,7 @@ class RouteEditor(QMainWindow):
         self._building = False
 
     def highlight_game_route(self, row: int, center: bool = True):
+        self.schedule_3d()
         if self._highlight is not None:
             self.scene.removeItem(self._highlight)
             self._highlight = None
@@ -1885,6 +2009,7 @@ class RouteEditor(QMainWindow):
         if self.selected_soldier is not None and not self.dragging_game_point:
             self.follow_soldier()
         self.draw_soldiers()
+        self.schedule_3d()
         self.update_status()
         self._poll_count = getattr(self, "_poll_count", 0) + 1
         if state and self.zone and self._poll_count % 10 == 1:  # toutes les 5 s
