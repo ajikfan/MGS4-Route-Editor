@@ -25,10 +25,16 @@ from dataclasses import dataclass, field
 
 @dataclass
 class RoutePoint:
+    """Point de route (0x30 octets) : position +0, drapeaux +0xC (2 = poste
+    de garde), position regardee +0x10, action +0x1C, allure +0x1E,
+    attente +0x20, orientation +0x22 (0x10000 = un tour), 0 ensuite."""
     position: tuple[float, float, float]
     flags: int
     look: tuple[float, float, float]
-    extra: int
+    action: int = 1
+    move: int = 1
+    wait: int = 0
+    angle: int = 0
 
 
 @dataclass
@@ -126,8 +132,8 @@ def parse(data: bytes) -> Geom:
                 position = struct.unpack_from(">3f", data, p)
                 flags = struct.unpack_from(">I", data, p + 0x0C)[0]
                 look = struct.unpack_from(">3f", data, p + 0x10)
-                extra = struct.unpack_from(">I", data, p + 0x20)[0]
-                points.append(RoutePoint(position, flags, look, extra))
+                action, move, wait, angle = struct.unpack_from(">4H", data, p + 0x1C)
+                points.append(RoutePoint(position, flags, look, action, move, wait, angle))
             geom.routes.append(GameRoute(ident, points))
             at += 16
     return geom

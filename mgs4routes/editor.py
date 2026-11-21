@@ -39,6 +39,7 @@ DATA_DIR = (os.path.dirname(os.path.abspath(sys.executable)) if getattr(sys, "fr
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 ROUTES_DIR = os.path.join(DATA_DIR, "routes")
 NAV_INDEX_FILE = os.path.join(DATA_DIR, "cache", "nv2_index.json")
+ACTION_NAMES_FILE = os.path.join(DATA_DIR, "action_names.json")
 ZONE_BLOCKS_FILE = os.path.join(DATA_DIR, "zone_blocks.json")  # blocs vus en jeu : zone -> progression -> ids
 STEAM_GUESSES = (
     r"C:\Program Files (x86)\Steam\steamapps\common\METAL GEAR SOLID 4\mgs4",
@@ -52,6 +53,16 @@ TOOLS = ("select", "point", "insert", "move", "delete")
 ACCENT = "#f0883e"
 POINT_SIZE = 0x30   # point de route en memoire (position en +0)
 HEIGHT_GAP = 1000   # ecart de hauteur (mm) avec un voisin au-dela duquel on previent
+# Champs d'un point de route du jeu (voir geom.RoutePoint) : decalage, format
+POINT_FIELDS = {"flags": (0x0C, "<I"), "action": (0x1C, "<H"), "move": (0x1E, "<H"),
+                "wait": (0x20, "<H"), "angle": (0x22, "<H")}
+# Actions verifiees en jeu (trainer, 2026-11-07) ; les autres codes sont a
+# decouvrir : on peut les nommer dans l'editeur (action_names.json).
+KNOWN_ACTIONS = {1: "Passage", 3: "Poste debout", 4: "Poste accroupi", 25: "Retour en réserve"}
+# Allures relevees en jeu (trainer, 2026-11-07)
+KNOWN_MOVES = {0: "Marche lente", 1: "Course", 2: "Marche/course", 3: "Marche", 4: "Course",
+               5: "Accroupi", 6: "Marche en visant", 12: "Marche"}
+WAIT_FOREVER = 0xFFFF
 MONO = "Consolas"
 # premiers caracteres du code de zone -> acte et region (affiche a cote du code)
 ACT_NAMES = {"s00": "Prologue", "s01": "Acte 1 · Moyen-Orient", "s02": "Acte 2 · Amérique du Sud",
@@ -645,12 +656,31 @@ class RouteEditor(QMainWindow):
         col = QVBoxLayout(panel)
         col.setContentsMargins(16, 18, 16, 16)
         col.setSpacing(8)
+        self._right_col = col
         col.addWidget(_section("Point sélectionné"))
         self.point_title = QLabel("Aucun point")
         self.point_title.setObjectName("big")
         self.point_title.setWordWrap(True)
         col.addWidget(self.point_title)
-        col.addSpacing(6)
+        nav = QHBoxLayout()
+        nav.setSpacing(6)
+        self.prev_button = QPushButton("◀  Précédent")
+        self.prev_button.setToolTip("Point précédent de la route (Page précédente)")
+        self.prev_button.setShortcut("PgUp")
+        self.prev_button.clicked.connect(lambda: self.step_point(-1))
+        self.next_button = QPushButton("Suivant  ▶")
+        self.next_button.setToolTip("Point suivant de la route (Page suivante)")
+        self.next_button.setShortcut("PgDown")
+        self.next_button.clicked.connect(lambda: self.step_point(1))
+        nav.addWidget(self.prev_button)
+        nav.addWidget(self.next_button)
+        col.addLayout(nav)
+        self.stack_label = QLabel("")
+        self.stack_label.setObjectName("warn")
+        self.stack_label.setWordWrap(True)
+        self.stack_label.hide()
+        col.addWidget(self.stack_label)
+        col.addSpacing(4)
         grid = QGridLayout()
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(4)
@@ -667,13 +697,18 @@ class RouteEditor(QMainWindow):
             self.coord[key] = spin
         col.addLayout(grid)
         col.addSpacing(6)
-        col.addWidget(_field("Action au point"))
+        col.addWidget(self._build_game_fields())
+        self.user_fields = QFrame()
+        self.user_fields.setStyleSheet("QFrame { background: transparent; }")
+        user_col = QVBoxLayout(self.user_fields)
+        user_col.setContentsMargins(0, 0, 0, 0)
+        user_col.setSpacing(8)
+        user_col.addWidget(_field("Action au point"))
         self.action_combo = QComboBox()
         self.action_combo.addItems(ACTIONS)
         self.action_combo.setToolTip("Enregistrée avec la route ; pas encore transmise au jeu")
         self.action_combo.currentTextChanged.connect(lambda t: self.edit_point("action", t))
-        col.addWidget(self.action_combo)
-        col.addSpacing(6)
+        user_col.addWidget(self.action_combo)
         grid = QGridLayout()
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(4)
@@ -690,7 +725,8 @@ class RouteEditor(QMainWindow):
         self.look_spin.valueChanged.connect(lambda v: self.edit_point("look", v))
         grid.addWidget(self.wait_spin, 1, 0)
         grid.addWidget(self.look_spin, 1, 1)
-        col.addLayout(grid)
+        user_col.addLayout(grid)
+        col.addWidget(self.user_fields)
         col.addSpacing(6)
         row = QHBoxLayout()
         self.tp_button = QPushButton("TP Snake ici")
@@ -700,9 +736,15 @@ class RouteEditor(QMainWindow):
         row.addWidget(self.tp_button)
         row.addWidget(self.snake_button)
         col.addLayout(row)
-        col.addSpacing(10)
+        self.assign_box = QFrame()
+        self.assign_box.setStyleSheet("QFrame { background: transparent; }")
+        assign_col = QVBoxLayout(self.assign_box)
+        assign_col.setContentsMargins(0, 10, 0, 0)
+        assign_col.setSpacing(8)
+        col.addWidget(self.assign_box)
+        col = assign_col  # la section Attribuer se range dans son cadre
         col.addWidget(_separator())
-        col.addSpacing(10)
+        col.addSpacing(4)
         col.addWidget(_section("Attribuer la route"))
         col.addWidget(_field("PNJ"))
         npc = QComboBox()
@@ -716,6 +758,7 @@ class RouteEditor(QMainWindow):
         assign.setObjectName("outline")
         assign.setEnabled(False)
         col.addWidget(assign)
+        col = self._right_col
         self.live_warning = QLabel("")
         self.live_warning.setObjectName("warn")
         self.live_warning.setWordWrap(True)
@@ -753,6 +796,149 @@ class RouteEditor(QMainWindow):
         col.addWidget(export)
         self.enable_point_panel(False)
         return panel
+
+    def _build_game_fields(self) -> QFrame:
+        """Champs d'un point de route du jeu (modifiables en edition en direct)."""
+        self.game_fields = QFrame()
+        self.game_fields.setStyleSheet("QFrame { background: transparent; }")
+        col = QVBoxLayout(self.game_fields)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(4)
+        head = QHBoxLayout()
+        head.addWidget(_field("Action à l'arrivée"))
+        head.addStretch(1)
+        self.name_action_button = QPushButton("Nommer…")
+        self.name_action_button.setStyleSheet("padding: 2px 8px; font-size: 11px;")
+        self.name_action_button.setToolTip("Donner un nom à ce code d'action (gardé pour toutes les zones)")
+        self.name_action_button.clicked.connect(self.name_action)
+        head.addWidget(self.name_action_button)
+        col.addLayout(head)
+        self.game_action = QComboBox()
+        self.game_action.setMaxVisibleItems(25)
+        self.game_action.activated.connect(lambda _i: self.edit_game_field("action", self.game_action.currentData()))
+        col.addWidget(self.game_action)
+        col.addSpacing(4)
+        col.addWidget(_field("Allure pour y aller"))
+        self.game_move = QComboBox()
+        self.game_move.setMaxVisibleItems(25)
+        self.game_move.activated.connect(lambda _i: self.edit_game_field("move", self.game_move.currentData()))
+        col.addWidget(self.game_move)
+        col.addSpacing(4)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(4)
+        grid.addWidget(_field("Attente"), 0, 0)
+        grid.addWidget(_field("Orientation (°)"), 0, 1)
+        self.game_wait = QSpinBox()
+        self.game_wait.setRange(0, WAIT_FOREVER)
+        self.game_wait.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.game_wait.setSpecialValueText("0")
+        self.game_wait.setToolTip("Unité à confirmer en jeu (valeurs courantes : 60, 90, 120, 180).\n"
+                                  "65535 = sans fin ; 65534 = valeur spéciale encore inconnue.")
+        self.game_wait.editingFinished.connect(lambda: self.edit_game_field("wait", self.game_wait.value()))
+        self.game_angle = QSpinBox()
+        self.game_angle.setRange(0, 359)
+        self.game_angle.setWrapping(True)
+        self.game_angle.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.game_angle.editingFinished.connect(
+            lambda: self.edit_game_field("angle", round(self.game_angle.value() * 0x10000 / 360) & 0xFFFF))
+        grid.addWidget(self.game_wait, 1, 0)
+        grid.addWidget(self.game_angle, 1, 1)
+        col.addLayout(grid)
+        self.game_forever = QCheckBox("Attente sans fin")
+        self.game_forever.clicked.connect(
+            lambda on: self.edit_game_field("wait", WAIT_FOREVER if on else 0))
+        col.addWidget(self.game_forever)
+        self.game_flags = QLabel("")
+        self.game_flags.setObjectName("hint")
+        self.game_flags.setToolTip("Drapeaux du point (+0xC) : 2 = poste de garde ; les autres bits sont inconnus")
+        col.addWidget(self.game_flags)
+        self.game_fields.hide()
+        return self.game_fields
+
+    def action_names(self) -> dict[int, str]:
+        names = dict(KNOWN_ACTIONS)
+        names.update({int(k): v for k, v in _read_json(ACTION_NAMES_FILE).items() if str(k).isdigit()})
+        return names
+
+    def action_label(self, code: int, names: dict | None = None) -> str:
+        name = (names if names is not None else self.action_names()).get(code)
+        return f"{code} · {name}" if name else f"{code} (0x{code:X}) · inconnue"
+
+    def fill_game_combos(self, point):
+        """Listes Action et Allure : codes de la zone (les plus frequents d'abord) + valeur du point."""
+        names = self.action_names()
+        counts = {}
+        for route in self.geom.routes:
+            for pt in route.points:
+                counts[pt.action] = counts.get(pt.action, 0) + 1
+        codes = sorted(set(counts) | set(names) | {point.action}, key=lambda c: (c not in names, -counts.get(c, 0), c))
+        self.game_action.clear()
+        for code in codes:
+            self.game_action.addItem(self.action_label(code, names), code)
+        self.game_action.setCurrentIndex(self.game_action.findData(point.action))
+        moves = sorted(set(KNOWN_MOVES) | {pt.move for r in self.geom.routes for pt in r.points} | {point.move})
+        self.game_move.clear()
+        for code in moves:
+            self.game_move.addItem(f"{code} · {KNOWN_MOVES[code]}" if code in KNOWN_MOVES else f"{code} · inconnue", code)
+        self.game_move.setCurrentIndex(self.game_move.findData(point.move))
+
+    def name_action(self):
+        if not self.game_pick:
+            return
+        r, i = self.game_pick
+        code = self.geom.routes[r].points[i].action
+        current = self.action_names().get(code, "")
+        name, ok = QInputDialog.getText(self, "Nommer l'action", f"Nom de l'action {code} (0x{code:X}) :", text=current)
+        if not ok:
+            return
+        data = _read_json(ACTION_NAMES_FILE)
+        if name.strip():
+            data[str(code)] = name.strip()
+        else:
+            data.pop(str(code), None)
+        try:
+            os.makedirs(os.path.dirname(ACTION_NAMES_FILE), exist_ok=True)
+            with open(ACTION_NAMES_FILE, "w", encoding="utf-8") as handle:
+                json.dump(data, handle, ensure_ascii=False, indent=1, sort_keys=True)
+        except OSError:
+            return
+        self.show_point()
+
+    def edit_game_field(self, key: str, value):
+        if not (self.live and self.game_pick is not None) or value is None:
+            return
+        r, i = self.game_pick
+        point = self.geom.routes[r].points[i]
+        if getattr(point, key) == value:
+            return
+        offset, fmt = POINT_FIELDS[key]
+        if self.write_game_bytes(r, i, offset, struct.pack(fmt, value)):
+            setattr(point, key, value)
+        self.show_point()
+
+    # -------------------------------------------------- passer d'un point a l'autre
+    def step_point(self, delta: int):
+        if self.game_pick is not None and self.selected == -1:
+            r, i = self.game_pick
+            count = len(self.geom.routes[r].points)
+            if count:
+                self.selected_soldier = None
+                self.select_game_point(r, (i + delta) % count)
+                x, _y, z = self.geom.routes[r].points[self.game_pick[1]].position
+                self.view.ensureVisible(QRectF(to_scene(x, z), to_scene(x, z)).adjusted(-1, -1, 1, 1), 80, 80)
+            return
+        route = self.route()
+        if route and route["points"]:
+            self.selected = (self.selected + delta) % len(route["points"]) if self.selected >= 0 else 0
+            self.redraw_routes()
+            self.show_point()
+
+    def stacked_points(self, x: float, z: float, radius: float = 300.0) -> list[tuple[int, int]]:
+        """Points des routes du jeu affichees a moins de radius mm de (x, z)."""
+        shown = self.visible_game_routes() | ({self.geom.routes[self.game_pick[0]].ident} if self.game_pick else set())
+        return [(r, i) for r, route in enumerate(self.geom.routes) if route.ident in shown
+                for i, pt in enumerate(route.points) if math.hypot(pt.position[0] - x, pt.position[2] - z) <= radius]
 
     # -------------------------------------------------- demarrage
     def start(self):
@@ -952,8 +1138,16 @@ class RouteEditor(QMainWindow):
             self.redraw_game_route(index)
 
     def write_game_point(self, r: int, i: int, position) -> bool:
-        """Ecrit la position d'un point d'une route du jeu, apres verification :
-        la route est a la meme adresse et la memoire contient ce qu'on attend."""
+        """Ecrit la position d'un point d'une route du jeu."""
+        if not self.write_game_bytes(r, i, 0, struct.pack("<3f", *position)):
+            return False
+        self.geom.routes[r].points[i].position = tuple(float(v) for v in position)
+        self.height_warning(r, i)
+        return True
+
+    def write_game_bytes(self, r: int, i: int, offset: int, data: bytes) -> bool:
+        """Ecrit dans un point d'une route du jeu, apres verification : la
+        route est a la meme adresse et la memoire contient ce qu'on attend."""
         route = self.geom.routes[r]
         location = self.link.route_location(route.ident)
         if location is None or location[1] != len(route.points):
@@ -972,15 +1166,14 @@ class RouteEditor(QMainWindow):
         if self.live_backup[route.ident][0] != address or current != self.live_state[route.ident]:
             self.live_message(f"La route {route.ident:06X} a changé en mémoire (rechargée par le jeu ?) : rien n'est écrit.")
             return False
-        data = struct.pack("<3f", *position)
-        if not self.link.write_bytes(address + POINT_SIZE * i, data):
+        start = POINT_SIZE * i + offset
+        if not self.link.write_bytes(address + start, data):
             self.live_message("Écriture refusée par le jeu.")
             return False
         state = bytearray(current)
-        state[POINT_SIZE * i:POINT_SIZE * i + 12] = data
+        state[start:start + len(data)] = data
         self.live_state[route.ident] = bytes(state)
-        route.points[i].position = tuple(float(v) for v in position)
-        self.height_warning(r, i)
+        self.live_message("")
         self.update_live_box()
         return True
 
@@ -1370,15 +1563,22 @@ class RouteEditor(QMainWindow):
         tolerance = 12 / (abs(self.view.transform().m11()) or 1.0)
         shown = self.visible_game_routes() if self.layer_checks["routes"].isChecked() else set()
         current = self.game_list.currentRow()
-        best = None
+        hits = []
         for r, route in enumerate(self.geom.routes):
             if route.ident not in shown and r != current:
                 continue
             for i, pt in enumerate(route.points):
                 d = math.hypot(pt.position[0] - scene_pos.x(), pt.position[2] + scene_pos.y())
-                if d <= tolerance and (best is None or d < best[0]):
-                    best = (d, r, i)
-        return best[1:] if best else None
+                if d <= tolerance:
+                    hits.append((r, i))
+        if not hits:
+            return None
+        hits.sort()
+        # clic repete au meme endroit : point superpose suivant
+        if self.game_pick in hits:
+            return hits[(hits.index(self.game_pick) + 1) % len(hits)]
+        return min(hits, key=lambda h: math.hypot(self.geom.routes[h[0]].points[h[1]].position[0] - scene_pos.x(),
+                                                 self.geom.routes[h[0]].points[h[1]].position[2] + scene_pos.y()))
 
     def select_game_point(self, r: int, i: int):
         self.game_pick = (r, i)
@@ -1427,6 +1627,29 @@ class RouteEditor(QMainWindow):
         self.point_title.setText(f"Point {i + 1} / {len(route.points)} · route du jeu {route.ident:06X} ({state})")
         for spin in self.coord.values():
             spin.setEnabled(self.live)
+        self.user_fields.hide()
+        self.assign_box.hide()
+        self.game_fields.show()
+        self.prev_button.setEnabled(len(route.points) > 1)
+        self.next_button.setEnabled(len(route.points) > 1)
+        self.fill_game_combos(pt)
+        for widget in (self.game_wait, self.game_angle, self.game_forever):
+            widget.blockSignals(True)
+        self.game_forever.setChecked(pt.wait == WAIT_FOREVER)
+        self.game_wait.setValue(pt.wait)
+        self.game_angle.setValue(round(pt.angle * 360 / 0x10000) % 360)
+        for widget in (self.game_wait, self.game_angle, self.game_forever):
+            widget.blockSignals(False)
+        for widget in (self.game_action, self.game_move, self.game_wait, self.game_angle, self.game_forever):
+            widget.setEnabled(self.live)
+        self.name_action_button.setEnabled(True)
+        self.game_flags.setText(f"Drapeaux 0x{pt.flags:X}" + (" · poste de garde" if pt.flags & 2 else ""))
+        stacked = [h for h in self.stacked_points(pt.position[0], pt.position[2]) if h != (r, i)]
+        if stacked:
+            names = ", ".join(f"{self.geom.routes[a].ident:06X} #{b + 1}" for a, b in stacked[:4])
+            self.stack_label.setText(f"{len(stacked)} autre(s) point(s) au même endroit : {names}"
+                                     + ("…" if len(stacked) > 4 else "") + ". Recliquer dessus pour passer de l'un à l'autre.")
+        self.stack_label.setVisible(bool(stacked))
         self.update_live_box()
         widgets = (*self.coord.values(), self.look_spin)
         for widget in widgets:
@@ -1560,6 +1783,12 @@ class RouteEditor(QMainWindow):
         if point is None and self.game_pick is not None:
             self.show_game_point()
             return
+        self.game_fields.hide()
+        self.stack_label.hide()
+        self.user_fields.show()
+        self.assign_box.show()
+        self.prev_button.setEnabled(bool(route and len(route["points"]) > 1))
+        self.next_button.setEnabled(bool(route and len(route["points"]) > 1))
         self.enable_point_panel(point is not None)
         self.loop_check.blockSignals(True)
         self.loop_check.setChecked(bool(route and route.get("loop")))
