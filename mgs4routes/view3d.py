@@ -8,6 +8,7 @@ soit celle du jeu (comme la carte 2D).
 Souris : glisser (gauche) = tourner, glisser (droit ou milieu) = deplacer,
 molette = zoom, double-clic = recentrer sur le point vise."""
 from mgs4routes.i18n import tr
+from mgs4routes.textures import FORMAT_DXT1, FORMAT_DXT5, decode_dxt
 import math
 
 import numpy as np
@@ -284,12 +285,13 @@ def actor_meshes(actors) -> tuple[np.ndarray, np.ndarray]:
 class TexturedBatch:
     """Triangles (x, y, z, u, v, r, g, b, a) d'une meme texture ; blended = couche de melange."""
 
-    def __init__(self, array: np.ndarray, image: np.ndarray | None, blended: bool = False):
+    def __init__(self, array: np.ndarray, image, blended: bool = False):
         self.blended = blended
         # donnees gardees : un contexte OpenGL recree (fenetre deplacee sur un
         # autre ecran...) oblige a tout renvoyer a la carte graphique
         self.array = np.ascontiguousarray(array, dtype=np.float32).reshape(-1, 9)
-        self.image = image  # RGBA (h, w, 4) ; None = gris
+        # DXT compresse (dict de TextureLibrary.compressed), RGBA (h, w, 4), ou None = gris
+        self.image = image
         self.buffer = self.texture = None
         self.count = 0
 
@@ -303,12 +305,55 @@ class TexturedBatch:
         self.buffer.allocate(data, len(data))
         self.buffer.release()
         self.count = len(self.array)
-        image = self.image if self.image is not None else np.full((4, 4, 4), 150, np.uint8)
+        image = self.image
+        if isinstance(image, dict):
+            self.texture = self._compressed_texture(image)
+            if self.texture is not None:
+                return
+            try:  # carte graphique sans DXT : decodage par le processeur
+                image = decode_dxt(image["levels"][0], image["w"], image["h"], image["format"])
+            except (ValueError, KeyError, IndexError):
+                image = None
+        image = image if image is not None else np.full((4, 4, 4), 150, np.uint8)
         image = np.ascontiguousarray(image)
         qimage = QImage(image.tobytes(), image.shape[1], image.shape[0], QImage.Format.Format_RGBA8888).copy()
         self.texture = QOpenGLTexture(qimage, QOpenGLTexture.MipMapGeneration.GenerateMipMaps)
         self.texture.setWrapMode(QOpenGLTexture.WrapMode.Repeat)
         self.texture.setMinMagFilters(QOpenGLTexture.Filter.LinearMipMapLinear, QOpenGLTexture.Filter.Linear)
+
+    @staticmethod
+    def _compressed_texture(tex: dict):
+        """Texture DXT envoyee telle quelle avec ses niveaux ; None si impossible."""
+        formats = {FORMAT_DXT1: QOpenGLTexture.TextureFormat.RGBA_DXT1,
+                   FORMAT_DXT5: QOpenGLTexture.TextureFormat.RGBA_DXT5}
+        fmt = formats.get(tex.get("format"))
+        levels = tex.get("levels") or []
+        if fmt is None or not levels:
+            return None
+        block = 8 if tex["format"] == FORMAT_DXT1 else 16
+        w, h = tex["w"], tex["h"]
+        for k, level in enumerate(levels):  # niveaux complets obligatoires
+            a, b = max(1, w >> k), max(1, h >> k)
+            if len(level) != max(1, (a + 3) // 4) * max(1, (b + 3) // 4) * block:
+                return None
+        texture = None
+        try:
+            texture = QOpenGLTexture(QOpenGLTexture.Target.Target2D)
+            texture.setFormat(fmt)
+            texture.setSize(w, h)
+            texture.setMipLevels(len(levels))
+            texture.allocateStorage()
+            if not texture.isStorageAllocated():
+                raise RuntimeError("stockage DXT refuse")
+            for k, level in enumerate(levels):
+                texture.setCompressedData(k, len(level), level)
+            texture.setWrapMode(QOpenGLTexture.WrapMode.Repeat)
+            texture.setMinMagFilters(QOpenGLTexture.Filter.LinearMipMapLinear, QOpenGLTexture.Filter.Linear)
+            return texture
+        except Exception:  # noqa: BLE001 - pilote ou liaison Qt sans DXT
+            if texture is not None and texture.isCreated():
+                texture.destroy()
+            return None
 
     def draw(self, gl: QOpenGLFunctions, program: QOpenGLShaderProgram):
         self.upload()

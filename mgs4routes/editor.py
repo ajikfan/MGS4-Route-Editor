@@ -1508,7 +1508,7 @@ class RouteEditor(QMainWindow):
         self.cell_cache = CellCache(self.files, CELL_CACHE_DIR)
         self.mesh_cache = MeshCache(self.files, MESH_CACHE_DIR)
         self.textures = TextureLibrary(self.files, root, TEXTURE_INDEX_FILE)
-        self.scene_builder = SceneBuilder(self.files, self.textures)
+        self.scene_builder = SceneBuilder(self.files, self.textures, os.path.join(DATA_DIR, "cache", "models"))
         self._textured_key, self._textured_busy = None, False
         self.textured_ready.connect(self.textured_done)
 
@@ -1772,7 +1772,7 @@ class RouteEditor(QMainWindow):
             try:
                 self.textures.set_zone(key[0])
                 # le fil laisse souvent la main : l'interface reste fluide (verrou de Python)
-                batches = self.scene_builder.build(instances, progress=lambda _k, _n: time.sleep(0.002))
+                batches = self.scene_builder.build(instances, progress=lambda _k, _n: time.sleep(0.002), zone=key[0])
             except Exception as error:  # le fil ne doit jamais tomber sans prevenir
                 batches = error
             self.textured_ready.emit(key, batches)
