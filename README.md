@@ -1,42 +1,78 @@
-# MGS4 Route Editor
+# MGS4 Route Editor — V1.0.0
 
-Éditeur de routes pour Metal Gear Solid 4.
+*[English version](README.en.md)*
 
-Application à part (indépendante de MGS4-Trainer) pour voir une zone de
-Metal Gear Solid 4 de dessus et y tracer des routes.
+Éditeur de routes pour Metal Gear Solid 4 (portage PC Steam) : voir une zone
+de dessus ou en 3D, tracer ses propres routes de patrouille, modifier en direct
+les routes du jeu et les donner aux soldats, aux alliés ou aux PNJ apparus.
+Fonctionne avec MGS4 1.4.1 et 1.4.2.
+
+Application autonome, séparée de
+[MGS4-Trainer](https://github.com/ajikfan/MGS4-Best-Trainer-Ever), dont elle
+reprend le système de mise à jour et les langues. Interface en français et en
+anglais. Usage en solo uniquement.
+
+## Installation
+
+**Avec l'exe (le plus simple)**
+
+1. Télécharger le zip de la [dernière version](https://github.com/ajikfan/MGS4-Route-Editor/releases/latest).
+2. Le décompresser où l'on veut (garder tout le dossier).
+3. Lancer `MGS4RouteEditor.exe`. Le dossier du jeu est trouvé tout seul (jeu
+   lancé, dossiers Steam habituels), sinon demandé une fois.
+4. Pour les fonctions en direct, lancer MGS4 avec une partie chargée.
+5. Ensuite, le bouton **Mises à jour** installe les nouvelles versions sans
+   retélécharger le zip.
+
+**Depuis les sources**
 
 ```
 python route_editor.py
 ```
 
-Python 3.12 et PySide6. Le dossier du jeu est trouvé tout seul (jeu lancé,
-dossiers Steam habituels), sinon demandé, puis mémorisé dans
-`settings.json`.
+Python 3.12, PySide6 et numpy. Les mises à jour se font alors par `git pull`.
 
-## Ce qui marche
+## Ce que fait l'éditeur
 
-- Carte de dessus d'une zone, lue dans son fichier `.geom`, sans lancer le
-  jeu : grille de la zone, routes du jeu (pointillés), repères, objets de
-  collision.
-- Mes routes : création, renommage, copie d'une route du jeu ; outils
-  Point (Alt+clic : position de Snake), Ligne (insérer), Déplacer,
-  Sélection, Supprimer ; coordonnées, action, attente, regard, boucle.
-  Enregistrées par zone dans `routes/<zone>.json` ; export JSON.
-- Jeu lancé (1.4.1 ou 1.4.2) : Snake en direct sur la carte, zone du jeu,
-  « TP Snake ici », « Point = Snake ».
+- **Carte de la zone**, lue dans les fichiers du jeu sans le lancer : sol
+  praticable, murs et obstacles, décor de collision, routes du jeu, repères.
+  Choix du niveau affiché (étage), automatique d'après la hauteur de Snake.
+- **Vue 3D** : décor de collision, ou **décor texturé** du jeu (modèles et
+  textures HD lus en direct quand on est dans la zone, chargés en une seconde
+  environ). Caméra libre comme le mode photo du trainer (ZQSD, souris,
+  monter/descendre, zoom).
+- **Mes routes** : création point par point (en 2D, ou en 3D directement sur
+  une surface), points superposés, action à l'arrivée, allure, attente, point
+  regardé, drapeaux et paramètres de chaque point, boucle ou aller simple.
+  Enregistrées par zone dans `routes/<zone>.json`.
+- **Routes fournies** : routes toutes faites livrées avec l'éditeur et
+  remplacées à chaque mise à jour, à attribuer telles quelles ou à copier dans
+  ses routes pour les modifier.
+- **En direct (jeu lancé)** : Snake, soldats, alliés, animaux et loups sur la
+  carte ; modification des routes du jeu ; **attribution** d'une route (du jeu,
+  fournie ou à soi) à n'importe quel PNJ ; téléportation de Snake.
+- Recherche dans les routes du jeu, suivi automatique de la zone du jeu,
+  journal des plantages (`logs/editeur.log`).
 
-## À venir
+Le jeu ne documente pas les codes d'action et d'allure ni les drapeaux des
+points : l'éditeur affiche ceux qui sont connus et marque les autres comme
+hypothèses, à renommer au fil des essais.
 
-- Murs et sol : la géométrie de collision du `.geom` est compressée, à
-  décoder.
-- Vue 3D.
-- Injection des routes dans le jeu et attribution à un PNJ.
+## Mises à jour et versions (développeurs)
 
-## Format `.geom` (relevé sur s04a40l)
+Comme le trainer : l'exe (`launcher.py`, `MGS4RouteEditor.spec`) ne contient
+que Python, PySide6 et numpy ; le code est livré à côté, dans `app/`
+(`release_files.py`). Chaque release GitHub porte un `manifest.json`
+(`make_manifest.py`) avec l'empreinte de chaque fichier : seuls les fichiers
+changés sont téléchargés, puis installés au lancement suivant.
 
-Gros-boutien. Table de sections en `+0x20` (type << 16, taille, position) :
-0 grille (origine, taille de cellule, nombre de cellules), 1 objets de
-collision (entrées de 0x70) puis géométrie compressée, 6 repères (entrées
-de 0x20 : genre, identifiant, position), 7 routes (identifiant, nombre de
-points, points de 0x30 octets : position, indicateurs, point regardé…).
-Coordonnées en millimètres, Y = hauteur.
+Le décodeur LZ4 des textures est une petite DLL livrée avec le code
+(`mgs4routes/lz4dec.dll`, source `native/lz4dec.c`, compilée par
+`gcc -O2 -shared -s -static`) ; sans elle, une version Python plus lente prend
+le relais.
+
+Pour publier une version : mettre à jour les routes fournies
+(`python tools/export_provided_routes.py`), changer `VERSION` dans
+`mgs4routes/__init__.py`, commiter, créer le tag, lancer
+`pyinstaller MGS4RouteEditor.spec` puis `python make_manifest.py`, et joindre à
+la release le zip de `dist/MGS4RouteEditor` et `dist/manifest.json`.
