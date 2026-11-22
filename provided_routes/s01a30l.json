@@ -1,0 +1,110 @@
+{
+ "zone": "s01a30l",
+ "routes": [
+  {
+   "name": "Route 1",
+   "color": "#f0883e",
+   "loop": true,
+   "points": [
+    {
+     "x": -50582,
+     "y": 800,
+     "z": -40495,
+     "action": 2,
+     "move": 2,
+     "wait": 0,
+     "angle": 0,
+     "look": null,
+     "flags": 0,
+     "param": 0,
+     "param2": 0,
+     "param3": 0
+    },
+    {
+     "x": -43017,
+     "y": 800,
+     "z": -60965,
+     "action": 2,
+     "move": 2,
+     "wait": 0,
+     "angle": 0,
+     "look": null,
+     "flags": 0,
+     "param": 0,
+     "param2": 0,
+     "param3": 0
+    },
+    {
+     "x": -54883,
+     "y": 800,
+     "z": -85143,
+     "action": 2,
+     "move": 2,
+     "wait": 0,
+     "angle": 0,
+     "look": null,
+     "flags": 0,
+     "param": 0,
+     "param2": 0,
+     "param3": 0
+    },
+    {
+     "x": -87220,
+     "y": 800,
+     "z": -87962,
+     "action": 2,
+     "move": 2,
+     "wait": 0,
+     "angle": 0,
+     "look": null,
+     "flags": 0,
+     "param": 0,
+     "param2": 0,
+     "param3": 0
+    },
+    {
+     "x": -91077,
+     "y": 800,
+     "z": -61262,
+     "action": 2,
+     "move": 2,
+     "wait": 0,
+     "angle": 0,
+     "look": null,
+     "flags": 0,
+     "param": 0,
+     "param2": 0,
+     "param3": 0
+    },
+    {
+     "x": -80990,
+     "y": 800,
+     "z": -44945,
+     "action": 2,
+     "move": 2,
+     "wait": 0,
+     "angle": 0,
+     "look": null,
+     "flags": 0,
+     "param": 0,
+     "param2": 0,
+     "param3": 0
+    },
+    {
+     "x": -58740,
+     "y": 800,
+     "z": -39308,
+     "action": 2,
+     "move": 2,
+     "wait": 0,
+     "angle": 0,
+     "look": null,
+     "flags": 0,
+     "param": 0,
+     "param2": 0,
+     "param3": 0
+    }
+   ]
+  }
+ ]
+}

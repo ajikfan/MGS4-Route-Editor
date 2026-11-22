@@ -1,0 +1,75 @@
+{
+ "zone": "s02a20l",
+ "routes": [
+  {
+   "name": "Route 1",
+   "color": "#f0883e",
+   "loop": false,
+   "points": [
+    {
+     "x": 20037,
+     "y": 2092,
+     "z": -8475,
+     "action": 98,
+     "move": 27,
+     "wait": 5,
+     "angle": 0,
+     "look": null,
+     "flags": 0,
+     "param": 0,
+     "param2": 0,
+     "param3": 0
+    },
+    {
+     "x": 19299,
+     "y": 2092,
+     "z": 1276,
+     "action": 98,
+     "move": 27,
+     "wait": 0,
+     "angle": 0,
+     "look": null,
+     "flags": 0,
+     "param": 0,
+     "param2": 0,
+     "param3": 0
+    }
+   ]
+  },
+  {
+   "name": "Route 2",
+   "color": "#4ea1ff",
+   "loop": false,
+   "points": [
+    {
+     "x": 17706,
+     "y": 2118,
+     "z": -8516,
+     "action": 98,
+     "move": 27,
+     "wait": 0,
+     "angle": 0,
+     "look": null,
+     "flags": 0,
+     "param": 0,
+     "param2": 0,
+     "param3": 0
+    },
+    {
+     "x": 17032,
+     "y": 2118,
+     "z": 1225,
+     "action": 98,
+     "move": 27,
+     "wait": 0,
+     "angle": 0,
+     "look": null,
+     "flags": 0,
+     "param": 0,
+     "param2": 0,
+     "param3": 0
+    }
+   ]
+  }
+ ]
+}

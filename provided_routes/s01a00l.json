@@ -1,0 +1,82 @@
+{
+ "zone": "s01a00l",
+ "routes": [
+  {
+   "name": "Route 1",
+   "color": "#f0883e",
+   "loop": false,
+   "points": [
+    {
+     "x": -96645,
+     "y": 40000,
+     "z": 119737,
+     "action": 2,
+     "wait": 0,
+     "look": null,
+     "move": 2,
+     "angle": 0,
+     "flags": 0,
+     "param": 0,
+     "param2": 0,
+     "param3": 0
+    },
+    {
+     "x": -55592,
+     "y": 40000,
+     "z": 83816,
+     "action": 2,
+     "wait": 0,
+     "look": null,
+     "move": 2,
+     "angle": 0,
+     "flags": 0,
+     "param": 0,
+     "param2": 0,
+     "param3": 0
+    },
+    {
+     "x": -44474,
+     "y": 40000,
+     "z": 53026,
+     "action": 2,
+     "wait": 0,
+     "look": null,
+     "move": 2,
+     "angle": 0,
+     "flags": 0,
+     "param": 0,
+     "param2": 0,
+     "param3": 0
+    },
+    {
+     "x": 158224,
+     "y": 40000,
+     "z": 114605,
+     "action": 2,
+     "wait": 0,
+     "look": null,
+     "move": 2,
+     "angle": 0,
+     "flags": 0,
+     "param": 0,
+     "param2": 0,
+     "param3": 0
+    },
+    {
+     "x": -35921,
+     "y": 40000,
+     "z": -144539,
+     "action": 2,
+     "wait": 0,
+     "look": null,
+     "move": 2,
+     "angle": 0,
+     "flags": 0,
+     "param": 0,
+     "param2": 0,
+     "param3": 0
+    }
+   ]
+  }
+ ]
+}

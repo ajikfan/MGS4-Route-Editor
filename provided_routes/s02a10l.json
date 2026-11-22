@@ -1,0 +1,174 @@
+{
+ "zone": "s02a10l",
+ "routes": [
+  {
+   "name": "Route 1",
+   "color": "#f0883e",
+   "loop": false,
+   "points": [
+    {
+     "x": -100989,
+     "y": -8044,
+     "z": 280740,
+     "action": 4,
+     "move": 5,
+     "wait": 10,
+     "angle": 19115,
+     "look": null,
+     "flags": 1,
+     "param": 0,
+     "param2": 0,
+     "param3": 0
+    },
+    {
+     "x": -100989,
+     "y": -8044,
+     "z": 280740,
+     "action": 47,
+     "move": 5,
+     "wait": 1500,
+     "angle": 18386,
+     "look": null,
+     "flags": 4097,
+     "param": 10000,
+     "param2": 0,
+     "param3": 0
+    },
+    {
+     "x": -100989,
+     "y": -8044,
+     "z": 280740,
+     "action": 42,
+     "move": 5,
+     "wait": 0,
+     "angle": 18386,
+     "look": null,
+     "flags": 1,
+     "param": 3753653,
+     "param2": 0,
+     "param3": 121010
+    },
+    {
+     "x": -100060,
+     "y": -8144,
+     "z": 282253,
+     "action": 2,
+     "move": 5,
+     "wait": 0,
+     "angle": 0,
+     "look": [
+      -99763,
+      -8044,
+      282519
+     ],
+     "flags": 0,
+     "param": 0,
+     "param2": 0,
+     "param3": 0
+    },
+    {
+     "x": -98360,
+     "y": -8044,
+     "z": 281227,
+     "action": 98,
+     "move": 5,
+     "wait": 0,
+     "angle": 0,
+     "look": [
+      -98685,
+      -8044,
+      281804
+     ],
+     "flags": 65536,
+     "param": 3000,
+     "param2": 0,
+     "param3": 0
+    },
+    {
+     "x": -93757,
+     "y": -8044,
+     "z": 281133,
+     "action": 2,
+     "move": 27,
+     "wait": 0,
+     "angle": 0,
+     "look": null,
+     "flags": 16,
+     "param": 0,
+     "param2": 0,
+     "param3": 0
+    }
+   ]
+  },
+  {
+   "name": "Route 2",
+   "color": "#4ea1ff",
+   "loop": true,
+   "points": [
+    {
+     "x": -170408,
+     "y": -9200,
+     "z": 297545,
+     "action": 0,
+     "move": 2,
+     "wait": 0,
+     "angle": 0,
+     "look": null,
+     "flags": 0,
+     "param": 0,
+     "param2": 0,
+     "param3": 0
+    },
+    {
+     "x": -164261,
+     "y": -9200,
+     "z": 297579,
+     "action": 38,
+     "move": 2,
+     "wait": 0,
+     "angle": 0,
+     "look": null,
+     "flags": 4097,
+     "param": 0,
+     "param2": 0,
+     "param3": 0
+    }
+   ]
+  },
+  {
+   "name": "Route 3",
+   "color": "#3fb950",
+   "loop": true,
+   "points": [
+    {
+     "x": -170683,
+     "y": -9200,
+     "z": 294935,
+     "action": 98,
+     "move": 27,
+     "wait": 0,
+     "angle": 0,
+     "look": null,
+     "flags": 0,
+     "param": 0,
+     "param2": 0,
+     "param3": 0
+    },
+    {
+     "x": -164055,
+     "y": -9200,
+     "z": 295141,
+     "action": 98,
+     "move": 27,
+     "wait": 0,
+     "angle": 0,
+     "look": null,
+     "flags": 0,
+     "param": 0,
+     "param2": 0,
+     "param3": 0
+    }
+   ]
+  }
+ ]
+}

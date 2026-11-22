@@ -7,6 +7,7 @@ soit celle du jeu (comme la carte 2D).
 
 Souris : glisser (gauche) = tourner, glisser (droit ou milieu) = deplacer,
 molette = zoom, double-clic = recentrer sur le point vise."""
+from mgs4routes.i18n import tr
 import math
 
 import numpy as np
@@ -384,9 +385,7 @@ class View3D(QOpenGLWidget):
         self._tick.setInterval(16)
         self._tick.timeout.connect(self._step)
         self._tick_time = 0.0
-        self.hint = QLabel("ZQSD : se déplacer · clic molette ou gauche maintenu + souris : regarder · "
-                           "clic droit : monter · clic gauche maintenu : descendre · A ou Maj : vite · Ctrl : lent · "
-                           "molette : zoom · clic : choisir un point · double-clic : vue de dessus", self)
+        self.hint = QLabel(tr("view3d.init.zqsd_se_deplacer_clic_molette"), self)
         self.hint.setObjectName("overlay")
 
     # -------------------------------------------------- donnees
@@ -574,14 +573,14 @@ class View3D(QOpenGLWidget):
         self.program.bindAttributeLocation("position", 0)
         self.program.bindAttributeLocation("color", 1)
         if not self.program.link():
-            self.status.emit("Vue 3D : shaders refusés par la carte graphique (" + self.program.log() + ")")
+            self.status.emit(tr("view3d.initializegl.vue_3d_shaders_refuses_par") + self.program.log() + ")")
         self.tex_program = QOpenGLShaderProgram(self)
         self.tex_program.addShaderFromSourceCode(QOpenGLShader.ShaderTypeBit.Vertex, TEX_VERTEX)
         self.tex_program.addShaderFromSourceCode(QOpenGLShader.ShaderTypeBit.Fragment, TEX_FRAGMENT)
         for k, name in enumerate(("position", "uv", "light")):
             self.tex_program.bindAttributeLocation(name, k)
         if not self.tex_program.link():
-            self.status.emit("Vue 3D : textures refusées par la carte graphique (" + self.tex_program.log() + ")")
+            self.status.emit(tr("view3d.initializegl.vue_3d_textures_refusees_par") + self.tex_program.log() + ")")
             self.tex_program = None
 
     def _release_gl(self):
@@ -792,7 +791,7 @@ class View3D(QOpenGLWidget):
                 if hit is not None:
                     self.placed.emit(*hit)
                 else:
-                    self.status.emit("Aucune surface sous la souris : point non posé.")
+                    self.status.emit(tr("view3d.mousereleaseevent.aucune_surface_sous_la_souris"))
         if event.button() == Qt.MouseButton.LeftButton:
             self._press = None
 

@@ -33,6 +33,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from mgs4routes import VERSION, i18n
+from mgs4routes.i18n import tr
 from mgs4routes import geom as geomlib
 from mgs4routes.game import NAV_TYPE, GameLink
 from mgs4routes.collision import MeshCache, clip_below
@@ -48,6 +50,9 @@ DATA_DIR = (os.path.dirname(os.path.abspath(sys.executable)) if getattr(sys, "fr
             else os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 ROUTES_DIR = os.path.join(DATA_DIR, "routes")
+# routes fournies avec l'editeur (une par zone, remplacees a chaque mise a jour, lecture seule)
+PROVIDED_DIR = os.path.join(i18n.BUNDLE_DIR, "provided_routes")
+PROVIDED_COLOR = "#4fd1c5"
 NAV_INDEX_FILE = os.path.join(DATA_DIR, "cache", "nv2_index.json")
 CELL_CACHE_DIR = os.path.join(DATA_DIR, "cache", "cells")
 MESH_CACHE_DIR = os.path.join(DATA_DIR, "cache", "meshes")
@@ -65,22 +70,22 @@ ANIM_SUPPORT_KNOWN = {"MERYL": {"move": {"27": False}}}  # essai du 2026-11-21 (
 # Hypotheses sur les bits des drapeaux (releve de toutes les routes du jeu, 2026-11-21) :
 # rien n'est verifie en jeu ; les noms donnes par l'utilisateur (flag_names.json) priment.
 FLAG_HINTS = {
-    0: "Hypothèse : phase d'alerte où le point s'applique (bits 0x1 à 0x8 souvent ensemble)",
-    1: "Hypothèse : phase d'alerte (voir 0x1) ; fréquent aux postes de garde",
-    2: "Hypothèse : phase d'alerte (voir 0x1) ; postes de garde sans attente",
-    3: "Hypothèse : phase d'alerte (voir 0x1)",
-    4: "Inconnu : surtout des passages, souvent le dernier point",
-    5: "Inconnu : postes de garde de l'acte 1",
-    9: "Hypothèse : variante A (va avec 0x400 = variante B)",
-    10: "Hypothèse : variante B (va avec 0x200 = variante A)",
-    12: "Hypothèse : action spéciale minutée (action 47 + paramètre 1 = durée ?) ; passage de BFA5CD",
-    16: "Inconnu : souvent avant un dénivelé",
-    17: "Inconnu : postes de garde sans attente",
-    18: "Hypothèse : le paramètre désigne un objet ou une scène (action 0, allure 0)",
-    19: "Hypothèse : escalade, escaliers ou échelles (acte 4, dénivelés)",
-    24: "Hypothèse : variante A (va avec 0x2000000)",
-    25: "Hypothèse : variante B (va avec 0x1000000)",
-    31: "Inconnu : acte 2 seulement",
+    0: tr("editor.const.hypothese_phase_d_alerte_ou"),
+    1: tr("editor.const.hypothese_phase_d_alerte_voir"),
+    2: tr("editor.const.hypothese_phase_d_alerte_voir_2"),
+    3: tr("editor.const.hypothese_phase_d_alerte_voir_3"),
+    4: tr("editor.const.inconnu_surtout_des_passages_souvent"),
+    5: tr("editor.const.inconnu_postes_de_garde_de"),
+    9: tr("editor.const.hypothese_variante_a_va_avec"),
+    10: tr("editor.const.hypothese_variante_b_va_avec"),
+    12: tr("editor.const.hypothese_action_speciale_minutee_action"),
+    16: tr("editor.const.inconnu_souvent_avant_un_denivele"),
+    17: tr("editor.const.inconnu_postes_de_garde_sans"),
+    18: tr("editor.const.hypothese_le_parametre_designe_un"),
+    19: tr("editor.const.hypothese_escalade_escaliers_ou_echelles"),
+    24: tr("editor.const.hypothese_variante_a_va_avec_2"),
+    25: tr("editor.const.hypothese_variante_b_va_avec_2"),
+    31: tr("editor.const.inconnu_acte_2_seulement"),
 }
 ZONE_BLOCKS_FILE = os.path.join(DATA_DIR, "zone_blocks.json")  # blocs vus en jeu : zone -> progression -> ids
 STEAM_GUESSES = (
@@ -132,50 +137,50 @@ POINT_FIELDS = {"flags": (0x0C, "<I"), "action": (0x1C, "<H"), "move": (0x1E, "<
                 "param": (0x24, "<I"), "param2": (0x28, "<I"), "param3": (0x2C, "<I")}
 # Actions verifiees en jeu (trainer, 2026-11-07) ; les autres codes sont a
 # decouvrir : on peut les nommer dans l'editeur (action_names.json).
-KNOWN_ACTIONS = {1: "Passage", 3: "Poste debout", 4: "Poste accroupi", 5: "Se coucher sur le ventre",
-                 25: "Retour en réserve", 98: "Les mains sur la tête",
+KNOWN_ACTIONS = {1: tr("editor.const.passage"), 3: tr("editor.const.poste_debout"), 4: tr("editor.const.poste_accroupi"), 5: tr("editor.const.se_coucher_sur_le_ventre"),
+                 25: tr("editor.const.retour_en_reserve"), 98: tr("editor.const.les_mains_sur_la_tete"),
                  # hypotheses (routes du jeu qui franchissent des obstacles, 2026-11-21) :
                  # toujours proposees, meme si la zone ne s'en sert pas
-                 60: "En haut d'un rebord (hypothèse)", 46: "Sauter en bas (hypothèse)",
-                 30: "Réception après un saut (hypothèse)", 31: "Réception après un saut, variante (hypothèse)",
-                 47: "Arrêt minuté (hypothèse)", 42: "Fin de route, message au script (hypothèse)"}
+                 60: tr("editor.const.en_haut_d_un_rebord"), 46: tr("editor.const.sauter_en_bas_hypothese"),
+                 30: tr("editor.const.reception_apres_un_saut_hypothese"), 31: tr("editor.const.reception_apres_un_saut_variante"),
+                 47: tr("editor.const.arret_minute_hypothese"), 42: tr("editor.const.fin_de_route_message_au")}
 # Allures relevees en jeu (utilisateur, 2026-11-21)
-KNOWN_MOVES = {0: "Marche lente", 1: "Marche lente", 2: "Marche", 3: "Marche soutenue", 4: "Course",
-               5: "Course accroupie", 6: "Marche accroupie en visant une cible", 12: "Course",
-               19: "Marche accroupie en visant droit devant",
-               22: "Marche à reculons accroupie en visant une cible",
-               23: "Marche soutenue accroupie en visant droit devant",
-               24: "Marche soutenue accroupie en visant une cible",
-               25: "Marche à reculons soutenue accroupie en visant une cible",
-               27: "Marche les mains sur la tête",
-               17: "Franchissement : escalade ou saut (hypothèse)"}
+KNOWN_MOVES = {0: tr("editor.const.marche_lente"), 1: tr("editor.const.marche_lente"), 2: tr("editor.const.marche"), 3: tr("editor.const.marche_soutenue"), 4: tr("editor.const.course"),
+               5: tr("editor.const.course_accroupie"), 6: tr("editor.const.marche_accroupie_en_visant_une"), 12: tr("editor.const.course"),
+               19: tr("editor.const.marche_accroupie_en_visant_droit"),
+               22: tr("editor.const.marche_a_reculons_accroupie_en"),
+               23: tr("editor.const.marche_soutenue_accroupie_en_visant"),
+               24: tr("editor.const.marche_soutenue_accroupie_en_visant_2"),
+               25: tr("editor.const.marche_a_reculons_soutenue_accroupie"),
+               27: tr("editor.const.marche_les_mains_sur_la"),
+               17: tr("editor.const.franchissement_escalade_ou_saut_hypothese")}
 WAIT_FOREVER = 0xFFFF
 # Classes (RTTI) des PNJ -> nom affiche ; camps : 1 PMC, 2 milice, 0 neutre, >= 0x80 allie
-NPC_NAMES = {"ENEMY_MIDEAST_PMC": "Soldat PMC", "ENEMY_MIDEAST_MIL": "Milicien",
-             "ENE_PMC_HUMV_GUNNER_MIDEAST": "Mitrailleur de Humvee",
-             "ENEMY_SOUTHAMERICA_PMC": "Soldat PMC", "ENEMY_SOUTHAMERICA_MIL": "Rebelle",
-             "ENEMY_SOUTHAMERICA_OPE": "PMC (autre type)", "MERYL": "Meryl"}
-CAMP_NAMES = {0: "neutre", 1: "PMC", 2: "milice / rebelles"}
+NPC_NAMES = {"ENEMY_MIDEAST_PMC": tr("editor.const.soldat_pmc"), "ENEMY_MIDEAST_MIL": tr("editor.const.milicien"),
+             "ENE_PMC_HUMV_GUNNER_MIDEAST": tr("editor.const.mitrailleur_de_humvee"),
+             "ENEMY_SOUTHAMERICA_PMC": tr("editor.const.soldat_pmc"), "ENEMY_SOUTHAMERICA_MIL": tr("editor.const.rebelle"),
+             "ENEMY_SOUTHAMERICA_OPE": tr("editor.const.pmc_autre_type"), "MERYL": tr("editor.const.meryl")}
+CAMP_NAMES = {0: tr("editor.const.neutre"), 1: "PMC", 2: tr("editor.const.milice_rebelles")}
 # couleur des PNJ sur la carte, selon le camp
 CAMP_COLORS = {1: "#ff5c5c", 2: "#4fd18b", 0: "#a3adbb"}
 ALLY_COLOR = "#5aa9ff"
 ANIMAL_COLOR = "#f2c94c"
-ANIMAL_NAMES = {"Hen": "Poule", "RatCuy": "Cochon d'Inde (cuy)", "Crow": "Corbeau", "Rat": "Rat",
-                "Frog": "Grenouille", "Dog": "Chien", "Wolf": "Loup", "Bird": "Oiseau"}
+ANIMAL_NAMES = {"Hen": tr("editor.const.poule"), "RatCuy": tr("editor.const.cochon_d_inde_cuy"), "Crow": tr("editor.const.corbeau"), "Rat": tr("editor.const.rat"),
+                "Frog": tr("editor.const.grenouille"), "Dog": tr("editor.const.chien"), "Wolf": tr("editor.const.loup"), "Bird": tr("editor.const.oiseau")}
 
 
 def camp_color(camp: int) -> str:
     return ALLY_COLOR if camp >= 0x80 else CAMP_COLORS.get(camp, "#d9a6ff")
 MONO = "Consolas"
 # premiers caracteres du code de zone -> acte et region (affiche a cote du code)
-ACT_NAMES = {"s00": "Prologue", "s01": "Acte 1 · Moyen-Orient", "s02": "Acte 2 · Amérique du Sud",
-             "s03": "Acte 3 · Europe de l'Est", "s04": "Acte 4 · Shadow Moses", "s05": "Acte 5 · Outer Haven",
-             "s10": "Hors actes"}
-TOOL_HINTS = {"select": "Clic : choisir un point · clic sur un soldat : sa route",
-              "point": "Clic : ajouter un point · Alt+clic : point à la position de Snake",
-              "insert": "Clic près d'un segment : insérer un point",
-              "move": "Glisser un point pour le déplacer",
-              "delete": "Clic sur un point : le supprimer"}
+ACT_NAMES = {"s00": tr("editor.const.prologue"), "s01": tr("editor.const.acte_1_moyen_orient"), "s02": tr("editor.const.acte_2_amerique_du_sud"),
+             "s03": tr("editor.const.acte_3_europe_de_l"), "s04": tr("editor.const.acte_4_shadow_moses"), "s05": tr("editor.const.acte_5_outer_haven"),
+             "s10": tr("editor.const.hors_actes")}
+TOOL_HINTS = {"select": tr("editor.const.clic_choisir_un_point_clic"),
+              "point": tr("editor.const.clic_ajouter_un_point_alt"),
+              "insert": tr("editor.const.clic_pres_d_un_segment"),
+              "move": tr("editor.const.glisser_un_point_pour_le"),
+              "delete": tr("editor.const.clic_sur_un_point_le")}
 
 # icones (traits, 24 x 24), dessinees a la couleur demandee
 ICONS = {
@@ -360,7 +365,7 @@ class GameHandle(QGraphicsEllipseItem):
         self.setPen(QPen(QColor("#ffffff"), 2))
         self.setZValue(26)
         self.setCursor(Qt.CursorShape.SizeAllCursor)
-        self.setToolTip("Glisser pour déplacer ce point dans le jeu")
+        self.setToolTip(tr("editor.init.glisser_pour_deplacer_ce_point"))
 
     def itemChange(self, change, value):
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
@@ -391,9 +396,9 @@ class MapView(QGraphicsView):
         box = QVBoxLayout(self.zoom_box)
         box.setContentsMargins(4, 4, 4, 4)
         box.setSpacing(2)
-        for name, tip, action in (("plus", "Zoom avant", lambda: self.scale(1.25, 1.25)),
-                                  ("minus", "Zoom arrière", lambda: self.scale(0.8, 0.8)),
-                                  ("target", "Centrer sur Snake", self.center_requested.emit)):
+        for name, tip, action in (("plus", tr("editor.init.zoom_avant"), lambda: self.scale(1.25, 1.25)),
+                                  ("minus", tr("editor.init.zoom_arriere"), lambda: self.scale(0.8, 0.8)),
+                                  ("target", tr("editor.init.centrer_sur_snake"), self.center_requested.emit)):
             button = QPushButton()
             button.setObjectName("zoom")
             button.setIcon(icon(name, "#e6e9ef"))
@@ -508,7 +513,7 @@ class RouteCard(QWidget):
         row.setSpacing(10)
         self.check = QCheckBox()
         self.check.setChecked(not route.get("hidden"))
-        self.check.setToolTip("Afficher sur la carte")
+        self.check.setToolTip(tr("editor.init.afficher_sur_la_carte"))
         self.check.toggled.connect(on_toggle)
         row.addWidget(self.check)
         dot = QLabel()
@@ -520,7 +525,7 @@ class RouteCard(QWidget):
         name = QLabel(route["name"])
         name.setStyleSheet("font-weight: 600; font-size: 13px;")
         n = len(route["points"])
-        summary = QLabel(f"{n} point{'s' if n > 1 else ''} · {'boucle' if route.get('loop') else 'aller simple'} · aucun PNJ")
+        summary = QLabel(tr("editor.init.a0_point_a1_a2_aucun", a0=n, a1='s' if n > 1 else '', a2=tr("editor.init.boucle") if route.get('loop') else tr("editor.init.aller_simple")))
         summary.setStyleSheet("color: #a3adbb; font-size: 12px;")
         text.addWidget(name)
         text.addWidget(summary)
@@ -580,7 +585,7 @@ class GameRouteDelegate(QStyledItemDelegate):
         right = rect.right() - 8
         painter.setPen(QColor("#8b95a3"))
         painter.drawText(QRectF(right - 44, rect.top(), 44, rect.height()),
-                         int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter), f"{index.data(ROLE_POINTS)} pts")
+                         int(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter), tr("editor.paint.a0_pts", a0=index.data(ROLE_POINTS)))
         x = right - 50
         font.setPixelSize(10)
         font.setBold(True)
@@ -604,7 +609,7 @@ class RouteEditor(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("MGS4 Route Editor")
+        self.setWindowTitle(f"MGS4 Route Editor {VERSION}")
         self.resize(1440, 900)
         self.link = GameLink()
         self.files = None
@@ -612,6 +617,7 @@ class RouteEditor(QMainWindow):
         self.geom = None
         self.routes = []          # routes de l'utilisateur de la zone
         self.current = -1         # route choisie
+        self.provided, self.provided_current = [], -1  # routes fournies (lecture seule) et celle choisie
         self.selected = -1        # point choisi
         self.tool = "select"  # outil au lancement
         self.snake = None
@@ -619,6 +625,7 @@ class RouteEditor(QMainWindow):
         self._building = False
         self._game_items = {"grid": [], "decor": [], "floor": [], "walls": [], "passages": [], "routes": [], "markers": [], "objects": []}
         self._route_items = []
+        self._provided_items = []
         self._highlight = None
         self._pick_item = None
         self._handle = None
@@ -688,8 +695,8 @@ class RouteEditor(QMainWindow):
         self.setCentralWidget(root)
 
         self.status_zone = QLabel("-")
-        self.status_snake = QLabel("Snake : jeu non lancé")
-        self.status_cursor = QLabel("Curseur -")
+        self.status_snake = QLabel(tr("editor.init.snake_jeu_non_lance"))
+        self.status_cursor = QLabel(tr("editor.init.curseur"))
         self.status_count = QLabel("")
         for widget in (self.status_zone, self.status_snake, self.status_cursor):
             self.statusBar().addWidget(widget)
@@ -719,20 +726,31 @@ class RouteEditor(QMainWindow):
         self.zone_combo.setObjectName("zone")
         self.zone_combo.setMinimumWidth(280)
         self.zone_combo.setMaxVisibleItems(25)
-        self.zone_combo.setToolTip("Zone affichée")
+        self.zone_combo.setToolTip(tr("editor.build_bar.zone_affichee"))
         self.zone_combo.activated.connect(lambda i: self.load_zone(self.zone_combo.itemData(i)))
         row.addWidget(self.zone_combo)
-        follow = QPushButton("Zone du jeu")
+        follow = QPushButton(tr("editor.build_bar.zone_du_jeu"))
         follow.setIcon(icon("target"))
-        follow.setToolTip("Afficher la zone où se trouve Snake")
+        follow.setToolTip(tr("editor.build_bar.afficher_la_zone_ou_se"))
         follow.clicked.connect(self.go_to_game_zone)
         row.addWidget(follow)
-        self.follow_game_zone = QCheckBox("Suivre le jeu")
-        self.follow_game_zone.setToolTip("Charger automatiquement la carte quand le jeu change de zone")
+        self.follow_game_zone = QCheckBox(tr("editor.build_bar.suivre_le_jeu"))
+        self.follow_game_zone.setToolTip(tr("editor.build_bar.charger_automatiquement_la_carte_quand"))
         self.follow_game_zone.setChecked(bool(_settings().get("route_editor_follow_zone", True)))
         self.follow_game_zone.toggled.connect(lambda on: _save_setting("route_editor_follow_zone", on))
         self.follow_game_zone.setStyleSheet("background: transparent;")
         row.addWidget(self.follow_game_zone)
+        self.language_combo = QComboBox()
+        for code, name in i18n.SUPPORTED_LANGUAGES.items():
+            self.language_combo.addItem(name, code)
+        self.language_combo.setCurrentIndex(max(self.language_combo.findData(i18n.LANGUAGE), 0))
+        self.language_combo.setToolTip(tr("editor.build_bar.langue_relance"))
+        self.language_combo.activated.connect(self.change_language)
+        row.addWidget(self.language_combo)
+        self.update_button = QPushButton(tr("update.button"))
+        self.update_button.setToolTip(tr("update.button_tip", version=VERSION))
+        self.update_button.clicked.connect(self.open_updates)
+        row.addWidget(self.update_button)
         seg = QFrame()
         seg.setStyleSheet("QFrame { border: 1px solid #2f3846; border-radius: 6px; }")
         seg.setFixedHeight(34)
@@ -741,8 +759,8 @@ class RouteEditor(QMainWindow):
         seg_row.setSpacing(0)
         self.mode_group = QButtonGroup(self)
         self.mode_group.setExclusive(True)
-        for text, tip in (("2D", "Carte de dessus : édition des routes"),
-                          ("3D", "Vue 3D : murs, routes, soldats (glisser = tourner, clic droit = déplacer, molette = zoom)")):
+        for text, tip in (("2D", tr("editor.build_bar.carte_de_dessus_edition_des")),
+                          ("3D", tr("editor.build_bar.vue_3d_murs_routes_soldats"))):
             button = QPushButton(text)
             button.setObjectName("seg")
             button.setCheckable(True)
@@ -756,7 +774,7 @@ class RouteEditor(QMainWindow):
         row.addWidget(_separator(True))
         self.tool_group = QButtonGroup(self)
         self.tool_group.setExclusive(True)
-        labels = {"select": "Sélection", "point": "Point", "insert": "Ligne", "move": "Déplacer", "delete": "Supprimer"}
+        labels = {"select": tr("editor.build_bar.selection"), "point": tr("editor.build_bar.point"), "insert": tr("editor.build_bar.ligne"), "move": tr("editor.build_bar.deplacer"), "delete": tr("editor.build_bar.supprimer")}
         self.tool_buttons = {}
         for key in TOOLS:
             button = QPushButton(labels[key])
@@ -772,10 +790,10 @@ class RouteEditor(QMainWindow):
             row.addWidget(button)
         row.addStretch(1)
 
-        self.link_label = QLabel("Jeu non connecté")
+        self.link_label = QLabel(tr("editor.build_bar.jeu_non_connecte"))
         self.link_label.setObjectName("pill")
         self.link_label.setProperty("off", True)
-        self.link_label.setToolTip("Le jeu est relu toutes les demi-secondes")
+        self.link_label.setToolTip(tr("editor.build_bar.le_jeu_est_relu_toutes"))
         self.link_label.setFixedHeight(30)
         row.addWidget(self.link_label)
         return bar
@@ -802,21 +820,34 @@ class RouteEditor(QMainWindow):
         self.left_split.addWidget(top)
         head = QHBoxLayout()
         head.setContentsMargins(8, 0, 0, 0)
-        head.addWidget(_section("Mes routes"))
+        head.addWidget(_section(tr("editor.build_left.mes_routes")))
         head.addStretch(1)
-        new = QPushButton("+ Nouvelle")
+        new = QPushButton(tr("editor.build_left.nouvelle"))
         new.setStyleSheet("padding: 4px 10px; font-size: 12px;")
         new.clicked.connect(lambda: self.new_route())
         head.addWidget(new)
         col.addLayout(head)
         self.route_list = QListWidget()
-        self.route_list.setMinimumHeight(56)
+        self.route_list.setMinimumHeight(70)
+        self.route_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.route_list.currentRowChanged.connect(self.choose_route)
         self.route_list.itemDoubleClicked.connect(lambda _item: self.rename_route())
         self.route_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.route_list.customContextMenuRequested.connect(self.route_menu)
-        self.route_list.setToolTip("Double-clic : renommer · clic droit : renommer, supprimer")
+        self.route_list.setToolTip(tr("editor.build_left.double_clic_renommer_clic_droit"))
         col.addWidget(self.route_list)
+        self.provided_head = _section(tr("editor.provided.title"))
+        self.provided_head.setContentsMargins(8, 6, 0, 0)
+        col.addWidget(self.provided_head)
+        self.provided_list = DeselectableList()
+        self.provided_list.setMinimumHeight(60)
+        self.provided_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.provided_list.setToolTip(tr("editor.provided.tooltip"))
+        self.provided_list.currentRowChanged.connect(self.choose_provided)
+        self.provided_list.itemDoubleClicked.connect(lambda _item: self.copy_provided_route())
+        self.provided_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.provided_list.customContextMenuRequested.connect(self.provided_menu)
+        col.addWidget(self.provided_list)
         middle = QWidget()
         col = QVBoxLayout(middle)
         col.setContentsMargins(0, 6, 0, 4)
@@ -824,20 +855,19 @@ class RouteEditor(QMainWindow):
         self.left_split.addWidget(middle)
         head = QHBoxLayout()
         head.setContentsMargins(8, 4, 8, 0)
-        head.addWidget(_section("Routes du jeu"))
+        head.addWidget(_section(tr("editor.build_left.routes_du_jeu")))
         head.addStretch(1)
-        for text, on in (("Tout", True), ("Aucune", False)):
+        for text, on in ((tr("editor.build_left.tout"), True), (tr("editor.build_left.aucune"), False)):
             button = QPushButton(text)
             button.setStyleSheet("padding: 3px 8px; font-size: 12px;")
-            button.setToolTip("Afficher toutes les routes du jeu" if on else "Masquer toutes les routes du jeu")
+            button.setToolTip(tr("editor.build_left.afficher_toutes_les_routes_du") if on else tr("editor.build_left.masquer_toutes_les_routes_du"))
             button.clicked.connect(lambda _c=False, v=on: self.show_all_game_routes(v))
             head.addWidget(button)
         col.addLayout(head)
         self.game_search = QLineEdit()
-        self.game_search.setPlaceholderText("Rechercher une route (ex. fa83, PNJ)")
+        self.game_search.setPlaceholderText(tr("editor.build_left.rechercher_une_route_ex_fa83"))
         self.game_search.setClearButtonEnabled(True)
-        self.game_search.setToolTip("Filtre par identifiant (morceau en hexadécimal) ; « PNJ » : routes attribuables. "
-                                    "Entrée : sélectionner la première trouvée")
+        self.game_search.setToolTip(tr("editor.build_left.filtre_par_identifiant_morceau_en"))
         self.game_search.textChanged.connect(self.filter_game_routes)
         self.game_search.returnPressed.connect(self.select_first_game_route)
         col.addWidget(self.game_search)
@@ -854,8 +884,7 @@ class RouteEditor(QMainWindow):
         self.game_list.currentRowChanged.connect(self.highlight_game_route)
         self.game_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.game_list.customContextMenuRequested.connect(self.game_route_menu)
-        self.game_list.setToolTip("Clic : la montrer · re-clic, clic dans le vide ou Échap : la désélectionner · "
-                                  "clic droit : copier dans mes routes")
+        self.game_list.setToolTip(tr("editor.build_left.clic_la_montrer_re_clic"))
         self.game_list.setMinimumHeight(120)
         col.addWidget(self.game_list, stretch=1)
         layers = QFrame()
@@ -864,15 +893,15 @@ class RouteEditor(QMainWindow):
         lay = QVBoxLayout(layers)
         lay.setContentsMargins(8, 14, 8, 14)
         lay.setSpacing(8)
-        lay.addWidget(_section("Calques"))
+        lay.addWidget(_section(tr("editor.build_left.calques")))
         self.layer_checks = {}
-        for key, text in (("soldiers", "PNJ (en direct)"), ("animals", "Animaux (en direct)"),
-                          ("textured", "Décor texturé (jeu en direct)"),
-                          ("decor", "Décor (formes de collision)"),
-                          ("floor", "Sol praticable"),
-                          ("walls", "Murs et obstacles"), ("passages", "Passages entre cellules"),
-                          ("grid", "Grille de la zone"), ("routes", "Routes du jeu"),
-                          ("markers", "Repères"), ("objects", "Objets de collision")):
+        for key, text in (("soldiers", tr("editor.build_left.pnj_en_direct")), ("animals", tr("editor.build_left.animaux_en_direct")),
+                          ("textured", tr("editor.build_left.decor_texture_jeu_en_direct")),
+                          ("decor", tr("editor.build_left.decor_formes_de_collision")),
+                          ("floor", tr("editor.build_left.sol_praticable")),
+                          ("walls", tr("editor.build_left.murs_et_obstacles")), ("passages", tr("editor.build_left.passages_entre_cellules")),
+                          ("grid", tr("editor.build_left.grille_de_la_zone")), ("routes", tr("editor.build_left.routes_du_jeu")),
+                          ("markers", tr("editor.build_left.reperes")), ("objects", tr("editor.build_left.objets_de_collision"))):
             check = QCheckBox(text)
             check.setChecked(key not in ("objects", "passages", "markers", "grid"))
             check.toggled.connect(lambda on, k=key: self.show_layer(k, on))
@@ -880,10 +909,12 @@ class RouteEditor(QMainWindow):
             lay.addWidget(check)
             if key == "soldiers":  # legende des couleurs
                 dot = '<span style="color:{0}; font-size:14px;">●</span>&nbsp;{1}'
-                legend = QLabel("&nbsp;&nbsp;".join((dot.format(CAMP_COLORS[1], "PMC"), dot.format(CAMP_COLORS[2], "rebelles"),
-                                                     dot.format(ALLY_COLOR, "alliés"),
-                                                     '<span style="font-size:14px;">○</span>&nbsp;sans route',
-                                                     f'<span style="color:{ANIMAL_COLOR}; font-size:13px;">◆</span>&nbsp;animaux')))
+                legend = QLabel("&nbsp;&nbsp;".join((dot.format(CAMP_COLORS[1], tr("editor.legend.pmc")),
+                                                     dot.format(CAMP_COLORS[2], tr("editor.legend.rebelles")),
+                                                     dot.format(ALLY_COLOR, tr("editor.legend.allies")),
+                                                     '<span style="font-size:14px;">○</span>&nbsp;' + tr("editor.legend.sans_route"),
+                                                     f'<span style="color:{ANIMAL_COLOR}; font-size:13px;">◆</span>&nbsp;'
+                                                     + tr("editor.legend.animaux"))))
                 legend.setWordWrap(True)
                 legend.setTextFormat(Qt.TextFormat.RichText)
                 legend.setObjectName("hint")
@@ -891,18 +922,18 @@ class RouteEditor(QMainWindow):
                 lay.addWidget(legend)
         level = QHBoxLayout()
         level.setSpacing(6)
-        level.addWidget(_field("Niveau"))
+        level.addWidget(_field(tr("editor.build_left.niveau")))
         self.level_spin = QDoubleSpinBox()
         self.level_spin.setRange(-100.0, 300.0)
         self.level_spin.setDecimals(1)
         self.level_spin.setSingleStep(0.5)
         self.level_spin.setSuffix(" m")
-        self.level_spin.setToolTip("Hauteur du sol affiché : cellules de -1,5 m à +2 m autour")
+        self.level_spin.setToolTip(tr("editor.build_left.hauteur_du_sol_affiche_cellules"))
         self.level_spin.valueChanged.connect(self.level_changed)
         level.addWidget(self.level_spin, stretch=1)
-        self.level_auto = QCheckBox("Auto")
+        self.level_auto = QCheckBox(tr("editor.build_left.auto"))
         self.level_auto.setChecked(True)
-        self.level_auto.setToolTip("Suivre la hauteur de Snake (sinon celle des routes de la zone)")
+        self.level_auto.setToolTip(tr("editor.build_left.suivre_la_hauteur_de_snake"))
         self.level_auto.toggled.connect(lambda on: self.update_level(force=True) if on else None)
         level.addWidget(self.level_auto)
         lay.addLayout(level)
@@ -921,9 +952,9 @@ class RouteEditor(QMainWindow):
         self.left_split.setStretchFactor(0, 0)
         self.left_split.setStretchFactor(1, 1)
         self.left_split.setStretchFactor(2, 0)
-        saved = _settings().get("route_editor_left_split")
-        self.left_split.setSizes(saved if isinstance(saved, list) and len(saved) == 3 else [130, 420, 380])
-        self.left_split.splitterMoved.connect(lambda *_a: _save_setting("route_editor_left_split", self.left_split.sizes()))
+        saved = _settings().get("route_editor_left_split_v2")  # v2 : routes fournies sous mes routes
+        self.left_split.setSizes(saved if isinstance(saved, list) and len(saved) == 3 else [250, 340, 340])
+        self.left_split.splitterMoved.connect(lambda *_a: _save_setting("route_editor_left_split_v2", self.left_split.sizes()))
         return panel
 
     def _build_right(self) -> QFrame:
@@ -934,19 +965,19 @@ class RouteEditor(QMainWindow):
         col.setContentsMargins(16, 18, 16, 16)
         col.setSpacing(8)
         self._right_col = col
-        col.addWidget(_section("Point sélectionné"))
-        self.point_title = QLabel("Aucun point")
+        col.addWidget(_section(tr("editor.build_right.point_selectionne")))
+        self.point_title = QLabel(tr("editor.build_right.aucun_point"))
         self.point_title.setObjectName("big")
         self.point_title.setWordWrap(True)
         col.addWidget(self.point_title)
         nav = QHBoxLayout()
         nav.setSpacing(6)
-        self.prev_button = QPushButton("◀  Précédent")
-        self.prev_button.setToolTip("Point précédent de la route (Page précédente)")
+        self.prev_button = QPushButton(tr("editor.build_right.precedent"))
+        self.prev_button.setToolTip(tr("editor.build_right.point_precedent_de_la_route"))
         self.prev_button.setShortcut("PgUp")
         self.prev_button.clicked.connect(lambda: self.step_point(-1))
-        self.next_button = QPushButton("Suivant  ▶")
-        self.next_button.setToolTip("Point suivant de la route (Page suivante)")
+        self.next_button = QPushButton(tr("editor.build_right.suivant"))
+        self.next_button.setToolTip(tr("editor.build_right.point_suivant_de_la_route"))
         self.next_button.setShortcut("PgDown")
         self.next_button.clicked.connect(lambda: self.step_point(1))
         nav.addWidget(self.prev_button)
@@ -962,7 +993,7 @@ class RouteEditor(QMainWindow):
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(4)
         self.coord = {}
-        for i, (key, text) in enumerate((("x", "X"), ("y", "Hauteur"), ("z", "Z"))):
+        for i, (key, text) in enumerate((("x", "X"), ("y", tr("editor.build_right.hauteur")), ("z", "Z"))):
             grid.addWidget(_field(text), 0, i)
             spin = QDoubleSpinBox()
             spin.setRange(-1e7, 1e7)
@@ -980,17 +1011,17 @@ class RouteEditor(QMainWindow):
         user_col = QVBoxLayout(self.user_fields)
         user_col.setContentsMargins(0, 0, 0, 0)
         user_col.setSpacing(8)
-        user_col.addWidget(_field("Action au point"))
+        user_col.addWidget(_field(tr("editor.build_right.action_au_point")))
         self.action_combo = QComboBox()
         self.action_combo.addItems(ACTIONS)
-        self.action_combo.setToolTip("Enregistrée avec la route ; pas encore transmise au jeu")
+        self.action_combo.setToolTip(tr("editor.build_right.enregistree_avec_la_route_pas"))
         self.action_combo.currentTextChanged.connect(lambda t: self.edit_point("action", t))
         user_col.addWidget(self.action_combo)
         grid = QGridLayout()
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(4)
-        grid.addWidget(_field("Attente (s)"), 0, 0)
-        grid.addWidget(_field("Regard (°)"), 0, 1)
+        grid.addWidget(_field(tr("editor.build_right.attente_s")), 0, 0)
+        grid.addWidget(_field(tr("editor.build_right.regard")), 0, 1)
         self.wait_spin = QSpinBox()
         self.wait_spin.setRange(0, 600)
         self.wait_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
@@ -1006,17 +1037,15 @@ class RouteEditor(QMainWindow):
         col.addWidget(self.user_fields)
         col.addSpacing(6)
         row = QHBoxLayout()
-        self.tp_button = QPushButton("TP Snake ici")
+        self.tp_button = QPushButton(tr("editor.build_right.tp_snake_ici"))
         self.tp_button.clicked.connect(self.teleport_here)
-        self.snake_button = QPushButton("Point = Snake")
+        self.snake_button = QPushButton(tr("editor.build_right.point_snake"))
         self.snake_button.clicked.connect(self.point_to_snake)
         row.addWidget(self.tp_button)
         row.addWidget(self.snake_button)
         col.addLayout(row)
-        self.stack_button = QPushButton("+ Point au même endroit")
-        self.stack_button.setToolTip("Ajoute, juste après ce point, un point au même endroit (copie à modifier),\n"
-                                     "comme les routes du jeu qui enchaînent plusieurs actions sur place.\n"
-                                     "Raccourci : Maj + clic sur le point avec l'outil Point.")
+        self.stack_button = QPushButton(tr("editor.build_right.point_au_meme_endroit"))
+        self.stack_button.setToolTip(tr("editor.build_right.ajoute_juste_apres_ce_point"))
         self.stack_button.clicked.connect(lambda: self.add_stacked_point())
         col.addWidget(self.stack_button)
         self.assign_box = QFrame()
@@ -1028,15 +1057,15 @@ class RouteEditor(QMainWindow):
         col = assign_col  # la section Attribuer se range dans son cadre
         col.addWidget(_separator())
         col.addSpacing(4)
-        col.addWidget(_section("Attribuer la route"))
-        col.addWidget(_field("PNJ (ou clic sur un soldat de la carte)"))
+        col.addWidget(_section(tr("editor.build_right.attribuer_la_route")))
+        col.addWidget(_field(tr("editor.build_right.pnj_ou_clic_sur_un")))
         self.npc_combo = QComboBox()
         self.npc_combo.setMaxVisibleItems(25)
-        self.npc_combo.addItem("Jeu non connecté ou autre zone", None)
+        self.npc_combo.addItem(tr("editor.build_right.jeu_non_connecte_ou_autre"), None)
         self.npc_combo.currentIndexChanged.connect(lambda _i: self.update_assign())
         self.npc_combo.activated.connect(self.npc_activated)  # choix de l'utilisateur seulement
         col.addWidget(self.npc_combo)
-        self.loop_check = QCheckBox("Parcours en boucle")
+        self.loop_check = QCheckBox(tr("editor.build_right.parcours_en_boucle"))
         self.loop_check.toggled.connect(self.edit_loop)
         col.addWidget(self.loop_check)
         self.assign_info = QLabel("")
@@ -1045,18 +1074,18 @@ class RouteEditor(QMainWindow):
         self.assign_info.setMinimumHeight(38)  # deux lignes (sinon chevauchement)
         col.addWidget(self.assign_info)
         buttons = QHBoxLayout()
-        self.assign_button = QPushButton("Attribuer")
+        self.assign_button = QPushButton(tr("editor.build_right.attribuer"))
         self.assign_button.setObjectName("outline")
-        self.assign_button.setToolTip("Donne au PNJ choisi la route choisie (du jeu ou une des tiennes)")
+        self.assign_button.setToolTip(tr("editor.build_right.donne_au_pnj_choisi_la"))
         self.assign_button.clicked.connect(self.assign_route)
-        self.unassign_button = QPushButton("Rendre sa route")
-        self.unassign_button.setToolTip("Remet la fiche de route d'origine du PNJ")
+        self.unassign_button = QPushButton(tr("editor.build_right.rendre_sa_route"))
+        self.unassign_button.setToolTip(tr("editor.build_right.remet_la_fiche_de_route"))
         self.unassign_button.clicked.connect(self.restore_npc)
         buttons.addWidget(self.assign_button)
         buttons.addWidget(self.unassign_button)
         col.addLayout(buttons)
-        self.anim_button = QPushButton("Animations de ce type…")
-        self.anim_button.setToolTip("Noter, pour ce type de PNJ, les allures et actions qui fonctionnent ou donnent une T-pose")
+        self.anim_button = QPushButton(tr("editor.build_right.animations_de_ce_type"))
+        self.anim_button.setToolTip(tr("editor.build_right.noter_pour_ce_type_de"))
         self.anim_button.clicked.connect(self.edit_anim_support)
         col.addWidget(self.anim_button)
         col = self._right_col
@@ -1070,15 +1099,15 @@ class RouteEditor(QMainWindow):
         box = QVBoxLayout(self.live_box)
         box.setContentsMargins(0, 8, 0, 0)
         box.setSpacing(6)
-        box.addWidget(_section("Routes du jeu modifiées"))
+        box.addWidget(_section(tr("editor.build_right.routes_du_jeu_modifiees")))
         self.live_count = QLabel("")
         self.live_count.setObjectName("hint")
         self.live_count.setWordWrap(True)
         box.addWidget(self.live_count)
         buttons = QHBoxLayout()
-        self.restore_button = QPushButton("Rétablir la route")
+        self.restore_button = QPushButton(tr("editor.build_right.retablir_la_route"))
         self.restore_button.clicked.connect(lambda: self.restore_game_routes(current_only=True))
-        restore_all = QPushButton("Tout rétablir")
+        restore_all = QPushButton(tr("editor.build_right.tout_retablir"))
         restore_all.clicked.connect(lambda: self.restore_game_routes(current_only=False))
         buttons.addWidget(self.restore_button)
         buttons.addWidget(restore_all)
@@ -1086,14 +1115,13 @@ class RouteEditor(QMainWindow):
         self.live_box.hide()
         col.addWidget(self.live_box)
         col.addStretch(1)
-        self.inject_button = QPushButton("Injecter dans le jeu")
+        self.inject_button = QPushButton(tr("editor.build_right.injecter_dans_le_jeu"))
         self.inject_button.setObjectName("primary")
         self.inject_button.setEnabled(False)
-        self.inject_button.setToolTip("Écrit la route choisie de « Mes routes » dans le jeu, à la place d'une "
-                                      "route de PNJ inutilisée ; elle peut ensuite être attribuée")
+        self.inject_button.setToolTip(tr("editor.build_right.ecrit_la_route_choisie_de"))
         self.inject_button.clicked.connect(self.inject_route)
         col.addWidget(self.inject_button)
-        export = QPushButton("Exporter (JSON)")
+        export = QPushButton(tr("editor.build_right.exporter_json"))
         export.setStyleSheet("background: transparent;")
         export.clicked.connect(self.export_routes)
         col.addWidget(export)
@@ -1109,11 +1137,11 @@ class RouteEditor(QMainWindow):
         col.setContentsMargins(0, 0, 0, 0)
         col.setSpacing(4)
         head = QHBoxLayout()
-        head.addWidget(_field("Action à l'arrivée"))
+        head.addWidget(_field(tr("editor.build_game_fields.action_a_l_arrivee")))
         head.addStretch(1)
-        self.name_action_button = QPushButton("Nommer…")
+        self.name_action_button = QPushButton(tr("editor.build_game_fields.nommer"))
         self.name_action_button.setStyleSheet("padding: 2px 8px; font-size: 11px;")
-        self.name_action_button.setToolTip("Donner un nom à ce code d'action (gardé pour toutes les zones)")
+        self.name_action_button.setToolTip(tr("editor.build_game_fields.donner_un_nom_a_ce"))
         self.name_action_button.clicked.connect(self.name_action)
         head.addWidget(self.name_action_button)
         col.addLayout(head)
@@ -1122,7 +1150,7 @@ class RouteEditor(QMainWindow):
         self.game_action.activated.connect(lambda _i: self.edit_game_field("action", self.game_action.currentData()))
         col.addWidget(self.game_action)
         col.addSpacing(4)
-        col.addWidget(_field("Allure pour y aller"))
+        col.addWidget(_field(tr("editor.build_game_fields.allure_pour_y_aller")))
         self.game_move = QComboBox()
         self.game_move.setMaxVisibleItems(25)
         self.game_move.activated.connect(lambda _i: self.edit_game_field("move", self.game_move.currentData()))
@@ -1131,14 +1159,13 @@ class RouteEditor(QMainWindow):
         grid = QGridLayout()
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(4)
-        grid.addWidget(_field("Attente"), 0, 0)
-        grid.addWidget(_field("Orientation (°)"), 0, 1)
+        grid.addWidget(_field(tr("editor.build_game_fields.attente")), 0, 0)
+        grid.addWidget(_field(tr("editor.build_game_fields.orientation")), 0, 1)
         self.game_wait = QSpinBox()
         self.game_wait.setRange(0, WAIT_FOREVER)
         self.game_wait.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self.game_wait.setSpecialValueText("0")
-        self.game_wait.setToolTip("Unité à confirmer en jeu (valeurs courantes : 60, 90, 120, 180).\n"
-                                  "65535 = sans fin ; 65534 = valeur spéciale encore inconnue.")
+        self.game_wait.setToolTip(tr("editor.build_game_fields.unite_a_confirmer_en_jeu"))
         self.game_wait.editingFinished.connect(lambda: self.edit_game_field("wait", self.game_wait.value()))
         self.game_angle = QSpinBox()
         self.game_angle.setRange(0, 359)
@@ -1151,11 +1178,11 @@ class RouteEditor(QMainWindow):
         col.addLayout(grid)
         col.addSpacing(4)
         head = QHBoxLayout()
-        head.addWidget(_field("Regard (point visé)"))
+        head.addWidget(_field(tr("editor.build_game_fields.regard_point_vise")))
         head.addStretch(1)
-        self.look_snake_button = QPushButton("Regard = Snake")
+        self.look_snake_button = QPushButton(tr("editor.build_game_fields.regard_snake"))
         self.look_snake_button.setStyleSheet("padding: 2px 8px; font-size: 11px;")
-        self.look_snake_button.setToolTip("Place le point visé sur la position actuelle de Snake")
+        self.look_snake_button.setToolTip(tr("editor.build_game_fields.place_le_point_vise_sur"))
         self.look_snake_button.clicked.connect(self.look_at_snake)
         head.addWidget(self.look_snake_button)
         col.addLayout(head)
@@ -1167,12 +1194,12 @@ class RouteEditor(QMainWindow):
             spin.setRange(-1e7, 1e7)
             spin.setDecimals(0)
             spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
-            spin.setToolTip(("X", "Hauteur", "Z")[i] + " du point visé (mm)")
+            spin.setToolTip(("X", tr("editor.build_right.hauteur"), "Z")[i] + tr("editor.build_game_fields.du_point_vise_mm"))
             spin.editingFinished.connect(self.edit_game_look)
             grid.addWidget(spin, 0, i)
             self.game_look[key] = spin
         col.addLayout(grid)
-        self.game_forever = QCheckBox("Attente sans fin")
+        self.game_forever = QCheckBox(tr("editor.build_game_fields.attente_sans_fin"))
         self.game_forever.clicked.connect(
             lambda on: self.edit_game_field("wait", WAIT_FOREVER if on else 0))
         col.addWidget(self.game_forever)
@@ -1182,25 +1209,24 @@ class RouteEditor(QMainWindow):
         grid.setVerticalSpacing(4)
         self.game_extra = {}
         for i, (key, text, tip) in enumerate((
-                ("flags", "Drapeaux", "Drapeaux du point (+0xC), en hexadécimal : 0x2 = poste de garde, "
-                                      "0x1000 accompagne l'action 47 ; les autres bits sont inconnus"),
-                ("param", "Param. 1", "Paramètre +0x24 (action 47 : 1000, 3000, 10000… peut-être une durée en ms)"),
-                ("param2", "Param. 2", "Paramètre +0x28 (rarement utilisé)"),
-                ("param3", "Param. 3", "Paramètre +0x2C (rarement utilisé)"))):
+                ("flags", tr("editor.build_game_fields.drapeaux"), tr("editor.build_game_fields.drapeaux_du_point_0xc_en")),
+                ("param", tr("editor.build_game_fields.param_1"), tr("editor.build_game_fields.parametre_0x24_action_47_1000")),
+                ("param2", tr("editor.build_game_fields.param_2"), tr("editor.build_game_fields.parametre_0x28_rarement_utilise")),
+                ("param3", tr("editor.build_game_fields.param_3"), tr("editor.build_game_fields.parametre_0x2c_rarement_utilise")))):
             if key == "flags":
                 head = QHBoxLayout()
                 head.setSpacing(4)
                 head.addWidget(_field(text))
-                bits = QPushButton("Bits…")
+                bits = QPushButton(tr("editor.build_game_fields.bits"))
                 bits.setStyleSheet("padding: 0px 6px; font-size: 11px;")
-                bits.setToolTip("Voir et cocher les bits un par un, avec leur rôle supposé")
+                bits.setToolTip(tr("editor.build_game_fields.voir_et_cocher_les_bits"))
                 bits.clicked.connect(self.edit_flag_bits)
                 head.addWidget(bits)
                 grid.addLayout(head, 0, i)
             else:
                 grid.addWidget(_field(text), 0, i)
             edit = QLineEdit()
-            edit.setToolTip(tip + "\nDécimal ou hexadécimal (0x…).")
+            edit.setToolTip(tip + tr("editor.build_game_fields.decimal_ou_hexadecimal_0x"))
             edit.setStyleSheet(f"font-family: {MONO};")
             edit.editingFinished.connect(lambda k=key: self.edit_extra_field(k))
             grid.addWidget(edit, 1, i)
@@ -1216,7 +1242,7 @@ class RouteEditor(QMainWindow):
 
     def action_label(self, code: int, names: dict | None = None) -> str:
         name = (names if names is not None else self.action_names()).get(code)
-        return f"{code} · {name}" if name else f"{code} (0x{code:X}) · inconnue"
+        return f"{code} · {name}" if name else tr("editor.action_label.a0_0x_a1_x_inconnue", a0=code, a1=code)
 
     def fill_game_combos(self, point):
         """Listes Action et Allure : codes de la zone (les plus frequents d'abord) + valeur du point."""
@@ -1233,7 +1259,7 @@ class RouteEditor(QMainWindow):
         moves = sorted(set(KNOWN_MOVES) | {pt.move for r in self.geom.routes for pt in r.points} | {point.move})
         self.game_move.clear()
         for code in moves:
-            self.game_move.addItem(f"{code} · {KNOWN_MOVES[code]}" if code in KNOWN_MOVES else f"{code} · inconnue", code)
+            self.game_move.addItem(f"{code} · {KNOWN_MOVES[code]}" if code in KNOWN_MOVES else tr("editor.fill_game_combos.a0_inconnue", a0=code), code)
         self.game_move.setCurrentIndex(self.game_move.findData(point.move))
 
     def fill_point_fields(self, pt, editable: bool):
@@ -1260,8 +1286,8 @@ class RouteEditor(QMainWindow):
             edit.setEnabled(editable)
             if key == "flags":
                 lines = [f"0x{1 << b:X} : {names.get(b, 'rôle inconnu')}" for b in range(32) if value >> b & 1]
-                edit.setToolTip("Drapeaux du point (+0xC), décimal ou hexadécimal (0x…).\n"
-                                + ("\n".join(lines) if lines else "Aucun bit.") + "\nBouton « Bits… » pour le détail.")
+                edit.setToolTip(tr("editor.fill_point_fields.drapeaux_du_point_0xc_decimal")
+                                + ("\n".join(lines) if lines else tr("editor.fill_point_fields.aucun_bit")) + tr("editor.fill_point_fields.bouton_bits_pour_le_detail"))
         for key, value in zip("xyz", pt.look):
             self.game_look[key].blockSignals(True)
             self.game_look[key].setValue(value)
@@ -1288,11 +1314,11 @@ class RouteEditor(QMainWindow):
             return
         editable = self.user_point_selected() is not None or self.live
         dialog = QDialog(self)
-        dialog.setWindowTitle(f"Drapeaux du point : 0x{flags:X}")
+        dialog.setWindowTitle(tr("editor.edit_flag_bits.drapeaux_du_point_0x_a0", a0=flags))
         dialog.setStyleSheet(STYLE)
         outer = QVBoxLayout(dialog)
-        note = QLabel("Cocher un bit change le point" + ("" if editable else " (le jeu doit être dans la zone affichée pour un point du jeu)")
-                      + ". Les noms sont des hypothèses à vérifier en jeu : renomme-les au fil de tes essais.")
+        note = QLabel(tr("editor.edit_flag_bits.cocher_un_bit_change_le") + ("" if editable else tr("editor.edit_flag_bits.le_jeu_doit_etre_dans"))
+                      + tr("editor.edit_flag_bits.les_noms_sont_des_hypotheses"))
         note.setObjectName("hint")
         note.setWordWrap(True)
         outer.addWidget(note)
@@ -1308,7 +1334,7 @@ class RouteEditor(QMainWindow):
             check.setEnabled(editable)
             check.setStyleSheet(f"font-family: {MONO};")
             edit = QLineEdit(names.get(bit, ""))
-            edit.setPlaceholderText("rôle inconnu")
+            edit.setPlaceholderText(tr("editor.edit_flag_bits.role_inconnu"))
             edit.setMinimumWidth(420)
             edit.setCursorPosition(0)  # debut du texte visible
             edit.setToolTip(names.get(bit, ""))
@@ -1318,9 +1344,9 @@ class RouteEditor(QMainWindow):
         outer.addLayout(grid)
         buttons = QHBoxLayout()
         buttons.addStretch(1)
-        cancel = QPushButton("Annuler")
+        cancel = QPushButton(tr("editor.edit_flag_bits.annuler"))
         cancel.clicked.connect(dialog.reject)
-        ok = QPushButton("Appliquer")
+        ok = QPushButton(tr("editor.edit_flag_bits.appliquer"))
         ok.setObjectName("outline")
         ok.clicked.connect(dialog.accept)
         buttons.addWidget(cancel)
@@ -1368,7 +1394,7 @@ class RouteEditor(QMainWindow):
         else:
             return
         current = self.action_names().get(code, "")
-        name, ok = QInputDialog.getText(self, "Nommer l'action", f"Nom de l'action {code} (0x{code:X}) :", text=current)
+        name, ok = QInputDialog.getText(self, tr("editor.name_action.nommer_l_action"), tr("editor.name_action.nom_de_l_action_a0", a0=code, a1=code), text=current)
         if not ok:
             return
         data = _read_json(ACTION_NAMES_FILE)
@@ -1463,12 +1489,12 @@ class RouteEditor(QMainWindow):
                 root = candidate
                 break
         else:
-            root = QFileDialog.getExistingDirectory(self, "Dossier du jeu (celui de mgs4.exe)")
+            root = QFileDialog.getExistingDirectory(self, tr("editor.start.dossier_du_jeu_celui_de"))
         if not _valid_root(root):
-            QMessageBox.critical(self, "Éditeur de routes", "Archives du jeu introuvables dans ce dossier.")
+            QMessageBox.critical(self, tr("editor.start.editeur_de_routes"), tr("editor.start.archives_du_jeu_introuvables_dans"))
             return
         _save_setting("game_root", root)
-        self.statusBar().showMessage("Lecture des archives du jeu…")
+        self.statusBar().showMessage(tr("editor.start.lecture_des_archives_du_jeu"))
         QApplication.processEvents()
         self.files = StageFiles(root)
         self.geoms = {}
@@ -1488,7 +1514,7 @@ class RouteEditor(QMainWindow):
 
         def progress(i, n):
             if i % 10 == 0:
-                self.statusBar().showMessage(f"Première ouverture : index des blocs de terrain ({i}/{n})…")
+                self.statusBar().showMessage(tr("editor.progress.premiere_ouverture_index_des_blocs", a0=i, a1=n))
                 QApplication.processEvents()
         self.nav.load_or_build(progress)
         self._poll_count = 0
@@ -1499,6 +1525,53 @@ class RouteEditor(QMainWindow):
     def go_to_game_zone(self):
         if self.game_location and self.game_location[0] in getattr(self, "geoms", {}):
             self.load_zone(self.game_location[0])
+
+    # -------------------------------------------------- mise a jour (comme le trainer)
+    update_found = Signal(object)  # release plus recente trouvee au lancement
+
+    def check_updates_at_launch(self):
+        """Recherche discrete au lancement : le bouton signale la nouvelle version."""
+        if not i18n.update_check_enabled():
+            return
+        from mgs4routes import updater
+
+        def work():
+            try:
+                release = updater.fetch_latest_release()
+            except updater.UpdateError:
+                return
+            if updater.is_newer(release["version"], VERSION):
+                self.update_found.emit(release)
+
+        self.update_found.connect(self.on_update_found)
+        threading.Thread(target=work, daemon=True).start()
+
+    def on_update_found(self, release: dict):
+        self._latest_release = release
+        self.update_button.setText(tr("update.button_new", version=release["version"]))
+        self.update_button.setObjectName("primary")
+        self.update_button.setStyleSheet(f"color: {ACCENT}; border-color: {ACCENT};")
+        self.statusBar().showMessage(tr("update.found_status", version=release["version"]), 10000)
+
+    def open_updates(self):
+        from mgs4routes.update_dialog import UpdateDialog
+        UpdateDialog(getattr(self, "_latest_release", None), restart=self.restart_after_update, parent=self).exec()
+
+    def restart_after_update(self):
+        """Relance par le lanceur, qui installe les fichiers telecharges."""
+        self.save_routes()
+        self.view3d.release_gl(final=True)
+        i18n.restart()
+
+    def change_language(self, _index: int):
+        """Langue choisie : enregistree, puis l'editeur se relance dans cette langue
+        (comme le trainer : pas de retraduction a chaud)."""
+        lang = self.language_combo.currentData()
+        if lang == i18n.LANGUAGE:
+            return
+        i18n.set_language(lang)
+        self.save_routes()
+        i18n.restart()
 
     def follow_zone_change(self):
         """Le jeu vient de changer de zone : la carte suit (case « Suivre le jeu »).
@@ -1525,6 +1598,8 @@ class RouteEditor(QMainWindow):
         self.zone_combo.setCurrentIndex(max(self.zone_combo.findData(zone), 0))
         self.geom = geomlib.parse(self.files.read(self.geoms[zone]))
         self.routes = self.read_routes(zone)
+        self.provided = self.read_provided(zone)
+        self.provided_current = -1
         self.current = 0 if self.routes else -1
         self.selected = -1
         self.scene.clear()
@@ -1535,6 +1610,7 @@ class RouteEditor(QMainWindow):
         self._handle = None
         self._game_items = {"grid": [], "decor": [], "floor": [], "walls": [], "passages": [], "routes": [], "markers": [], "objects": []}
         self._route_items = []
+        self._provided_items = []
         self._highlight = None
         self._pick_item = None
         self.dragging_game_point = False
@@ -1578,7 +1654,7 @@ class RouteEditor(QMainWindow):
             hx, _hy, hz = obj.half_size
             rect = self.scene.addRect(QRectF(to_scene(cx - hx, cz + hz), to_scene(cx + hx, cz - hz)).normalized(),
                                       cosmetic("#3c4a5b", 1.5), QBrush(QColor(60, 74, 91, 60)))
-            rect.setToolTip(f"Objet de collision {obj.ident:#08x} (forme {obj.shape})")
+            rect.setToolTip(tr("editor.draw_game_layers.objet_de_collision_a0_08x", a0=obj.ident, a1=obj.shape))
             rect.setZValue(-5)
             self._game_items["objects"].append(rect)
         shown = self.visible_game_routes()
@@ -1592,7 +1668,7 @@ class RouteEditor(QMainWindow):
             item = self.scene.addPath(cross, cosmetic("#c9d1dc", 1.2))
             item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
             item.setPos(to_scene(m.position[0], m.position[2]))
-            item.setToolTip(f"Repère {m.ident:#08x} (genre {m.kind:#x}) · hauteur {m.position[1]:.0f}")
+            item.setToolTip(tr("editor.draw_game_layers.repere_a0_08x_genre_a1", a0=m.ident, a1=m.kind, a2=m.position[1]))
             item.setZValue(2)
             self._game_items["markers"].append(item)
         for key, check in self.layer_checks.items():
@@ -1609,7 +1685,7 @@ class RouteEditor(QMainWindow):
         for p in route.points[1:]:
             path.lineTo(to_scene(p.position[0], p.position[2]))
         item = self.scene.addPath(path, cosmetic(color, 2 if modified else 1.5, Qt.PenStyle.DashLine))
-        item.setToolTip(f"Route du jeu {route.ident:06X} · {len(route.points)} points" + (" · modifiée" if modified else ""))
+        item.setToolTip(tr("editor.draw_game_route.route_du_jeu_a0_06x", a0=route.ident, a1=len(route.points)) + (tr("editor.draw_game_route.modifiee") if modified else ""))
         item.setZValue(0)
         item.setData(0, route.ident)
         group.append(item)
@@ -1688,8 +1764,8 @@ class RouteEditor(QMainWindow):
             return
         self._textured_busy = True
         first = self.textures._global is None and not os.path.exists(TEXTURE_INDEX_FILE)
-        self.statusBar().showMessage("Décor texturé : première fois, index des textures du jeu (environ 20 s)…" if first
-                                     else "Décor texturé : lecture des modèles et des textures…")
+        self.statusBar().showMessage(tr("editor.update_textured.decor_texture_premiere_fois_index") if first
+                                     else tr("editor.update_textured.decor_texture_lecture_des_modeles"))
 
         def work():
             batches = None
@@ -1719,7 +1795,7 @@ class RouteEditor(QMainWindow):
     def textured_done(self, key, batches):
         self._textured_busy = False
         if isinstance(batches, Exception) or batches is None:
-            self.statusBar().showMessage(f"Décor texturé impossible : {batches}", 8000)
+            self.statusBar().showMessage(tr("editor.textured_done.decor_texture_impossible_a0", a0=batches), 8000)
             return
         if key != self.textured_wanted_key():  # zone ou niveau change entre-temps
             self.schedule_3d()
@@ -1731,7 +1807,7 @@ class RouteEditor(QMainWindow):
             self._textured_key = key  # pas de nouvel essai en boucle dans cette zone
             self._textured_useless = True
             self.view3d.set_textured([])
-            self.statusBar().showMessage("Décor texturé indisponible dans cette zone : décor de collision affiché", 8000)
+            self.statusBar().showMessage(tr("editor.textured_done.decor_texture_indisponible_dans_cette"), 8000)
             self.walls_3d_dirty = True
             self.schedule_3d()
             return
@@ -1739,7 +1815,7 @@ class RouteEditor(QMainWindow):
         self._textured_key = key
         self.view3d.set_textured(batches)
         triangles = sum(len(b[0]) for b in batches) // 3
-        self.statusBar().showMessage(f"Décor texturé : {triangles:,} triangles, {len(batches)} textures".replace(",", " "), 6000)
+        self.statusBar().showMessage(tr("editor.textured_done.decor_texture_a0_triangles_a1", a0=triangles, a1=len(batches)).replace(",", " "), 6000)
         self.walls_3d_dirty = True
         self.schedule_3d()
 
@@ -1797,6 +1873,11 @@ class RouteEditor(QMainWindow):
                     continue
                 polylines.append(([p.position for p in route.points], color, True))
                 picks += [(("game", index, i), p.position) for i, p in enumerate(route.points)]
+        for r_index, route in enumerate(getattr(self, "provided", [])):
+            pts = [(p["x"], p["y"], p["z"]) for p in route["points"]]
+            if route.get("loop") and len(pts) > 2:
+                pts.append(pts[0])
+            polylines.append((pts, PROVIDED_COLOR if r_index == self.provided_current else "#2f7f78", True))
         for r_index, route in enumerate(self.routes):
             if route.get("hidden") and r_index != self.current:
                 continue
@@ -1914,7 +1995,7 @@ class RouteEditor(QMainWindow):
         route = self.geom.routes[r]
         location = self.link.route_location(route.ident)
         if location is None or location[1] != len(route.points):
-            self.live_message(f"Route {route.ident:06X} introuvable en mémoire : rien n'est écrit.")
+            self.live_message(tr("editor.write_game_bytes.route_a0_06x_introuvable_en", a0=route.ident))
             return False
         address, total = location
         current = self.link.read_points(address, total)
@@ -1927,11 +2008,11 @@ class RouteEditor(QMainWindow):
             self.live_backup[route.ident] = (address, current)
             self.live_state[route.ident] = current
         if self.live_backup[route.ident][0] != address or current != self.live_state[route.ident]:
-            self.live_message(f"La route {route.ident:06X} a changé en mémoire (rechargée par le jeu ?) : rien n'est écrit.")
+            self.live_message(tr("editor.write_game_bytes.la_route_a0_06x_a", a0=route.ident))
             return False
         start = POINT_SIZE * i + offset
         if not self.link.write_bytes(address + start, data):
-            self.live_message("Écriture refusée par le jeu.")
+            self.live_message(tr("editor.write_game_bytes.ecriture_refusee_par_le_jeu"))
             return False
         state = bytearray(current)
         state[start:start + len(data)] = data
@@ -1945,8 +2026,7 @@ class RouteEditor(QMainWindow):
         y = pts[i].position[1]
         gaps = [abs(y - pts[k].position[1]) for k in (i - 1, i + 1) if 0 <= k < len(pts)]
         if gaps and max(gaps) > HEIGHT_GAP:
-            self.live_message(f"Attention : {max(gaps) / 1000:.1f} m de différence de hauteur avec un point voisin. "
-                              "Le soldat risque de ne pas trouver de chemin.")
+            self.live_message(tr("editor.height_warning.attention_a0_1f_m_de", a0=max(gaps) / 1000))
         else:
             self.live_message("")
 
@@ -2017,7 +2097,7 @@ class RouteEditor(QMainWindow):
             if route.ident in idents and route.ident in fresh and route.ident not in failed:
                 self.geom.routes[index] = fresh[route.ident]
                 self.redraw_game_route(index)
-        self.live_message("Échec pour " + ", ".join(f"{i:06X}" for i in failed) if failed else "")
+        self.live_message(tr("editor.restore_game_routes.echec_pour") + ", ".join(f"{i:06X}" for i in failed) if failed else "")
         self.update_live_box()
         self.show_point()
 
@@ -2081,10 +2161,10 @@ class RouteEditor(QMainWindow):
         ids = sorted({i for ids in learned.values() for i in ids})
         paths = [p for p in (self.nav.path_for_id(i) for i in ids) if p]
         if paths:
-            return paths, f"vus en jeu ({len(learned)} progression(s))"
+            return paths, tr("editor.zone_blocks.vus_en_jeu_a0_progression", a0=len(learned))
         pts = [p.position for r in self.geom.routes for p in r.points]
         if not pts:
-            return [], "aucun"
+            return [], tr("editor.zone_blocks.aucun")
         x0, x1 = min(p[0] for p in pts), max(p[0] for p in pts)
         z0, z1 = min(p[2] for p in pts), max(p[2] for p in pts)
         mx, mz = (x1 - x0) * 0.1 + 2000, (z1 - z0) * 0.1 + 2000
@@ -2095,7 +2175,7 @@ class RouteEditor(QMainWindow):
         paths, source = self.zone_blocks()
         self.block_paths = paths
         self.cells = [cell for path in paths for cell in self.cell_cache.get(path)]
-        self._blocks_text = (f"Carte : {len(paths)} bloc(s), {len(self.cells)} cellules · {source}"
+        self._blocks_text = (tr("editor.draw_walls.carte_a0_bloc_s_a1", a0=len(paths), a1=len(self.cells), a2=source)
                              + ("\n" + ", ".join(p.split("/")[-1][:8] for p in paths[:6]) + ("…" if len(paths) > 6 else "")
                                 if paths else ""))
         self.update_level(force=True, redraw=False)
@@ -2154,8 +2234,7 @@ class RouteEditor(QMainWindow):
             item.setVisible(self.layer_checks[key].isChecked())
             self._game_items[key].append(item)
         self.draw_decor_2d()
-        self.blocks_label.setText(f"{self._blocks_text}\nNiveau {self.level / 1000:.1f} m : "
-                                  f"{len(here)} cellules, {count} murs")
+        self.blocks_label.setText(tr("editor.draw_level.a0_niveau_a1_1f_m", a0=self._blocks_text, a1=self.level / 1000, a2=len(here), a3=count))
         self.walls_3d_dirty = True
         self.schedule_3d()
 
@@ -2357,6 +2436,15 @@ class RouteEditor(QMainWindow):
             self.route_list.setItemWidget(item, card)
         self.route_list.setCurrentRow(self.current)
         self.route_list.blockSignals(False)
+        self.provided_list.blockSignals(True)
+        self.provided_list.clear()
+        for route in self.provided:
+            n = len(route["points"])
+            self.provided_list.addItem(tr("editor.provided.item", a0=route["name"], a1=n))
+        self.provided_list.setCurrentRow(-1)
+        self.provided_list.blockSignals(False)
+        self.provided_head.setVisible(bool(self.provided))
+        self.provided_list.setVisible(bool(self.provided))
         self.game_list.blockSignals(True)
         self.game_list.clear()
         shown = self.visible_game_routes()
@@ -2366,7 +2454,7 @@ class RouteEditor(QMainWindow):
             item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
             item.setCheckState(Qt.CheckState.Checked if route.ident in shown else Qt.CheckState.Unchecked)
             item.setData(ROLE_POINTS, len(route.points))
-            item.setToolTip("Cocher : afficher sur la carte")
+            item.setToolTip(tr("editor.fill_lists.cocher_afficher_sur_la_carte"))
             self.game_list.addItem(item)
         self.game_list.setUpdatesEnabled(True)
         self.game_list.blockSignals(False)
@@ -2397,7 +2485,7 @@ class RouteEditor(QMainWindow):
 
     def new_route(self, points=None, name=None):
         color = ROUTE_COLORS[len(self.routes) % len(ROUTE_COLORS)]
-        self.routes.append({"name": name or f"Route {len(self.routes) + 1}", "color": color, "loop": False,
+        self.routes.append({"name": name or tr("editor.new_route.route_a0", a0=len(self.routes) + 1), "color": color, "loop": False,
                             "points": points or []})
         self.current = len(self.routes) - 1
         self.selected = -1
@@ -2407,7 +2495,7 @@ class RouteEditor(QMainWindow):
         if not 0 <= self.current < len(self.routes):
             return
         name = self.routes[self.current]["name"]
-        if QMessageBox.question(self, "Supprimer la route", f"Supprimer « {name} » ?") != QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(self, tr("editor.delete_route.supprimer_la_route"), tr("editor.delete_route.supprimer_a0", a0=name)) != QMessageBox.StandardButton.Yes:
             return
         del self.routes[self.current]
         self.current = min(self.current, len(self.routes) - 1)
@@ -2418,7 +2506,7 @@ class RouteEditor(QMainWindow):
         route = self.route()
         if not route:
             return
-        name, ok = QInputDialog.getText(self, "Renommer la route", "Nom :", text=route["name"])
+        name, ok = QInputDialog.getText(self, tr("editor.rename_route.renommer_la_route"), tr("editor.rename_route.nom"), text=route["name"])
         if ok and name.strip():
             route["name"] = name.strip()
             self.changed()
@@ -2427,8 +2515,8 @@ class RouteEditor(QMainWindow):
         if self.route_list.itemAt(pos) is None:
             return
         menu = QMenu(self)
-        menu.addAction("Renommer…", self.rename_route)
-        menu.addAction("Supprimer", self.delete_route)
+        menu.addAction(tr("editor.route_menu.renommer"), self.rename_route)
+        menu.addAction(tr("editor.build_bar.supprimer"), self.delete_route)
         menu.exec(self.route_list.mapToGlobal(pos))
 
     def game_route_menu(self, pos):
@@ -2436,7 +2524,7 @@ class RouteEditor(QMainWindow):
             return
         self.game_list.setCurrentItem(self.game_list.itemAt(pos))
         menu = QMenu(self)
-        menu.addAction("Copier dans mes routes", self.copy_game_route)
+        menu.addAction(tr("editor.game_route_menu.copier_dans_mes_routes"), self.copy_game_route)
         menu.exec(self.game_list.mapToGlobal(pos))
 
     def filter_game_routes(self, _text: str = ""):
@@ -2446,8 +2534,8 @@ class RouteEditor(QMainWindow):
         if not hasattr(self, "game_search") or self.geom is None:
             return
         words = self.game_search.text().strip().upper().replace("0X", "").split()
-        want_npc = "PNJ" in words
-        parts = [w for w in words if w != "PNJ"]
+        want_npc = bool({"PNJ", "NPC"} & set(words))
+        parts = [w for w in words if w not in ("PNJ", "NPC")]
         shown = 0
         for row, route in enumerate(self.geom.routes):
             ident = f"{route.ident:06X}"
@@ -2455,7 +2543,7 @@ class RouteEditor(QMainWindow):
             self.game_list.setRowHidden(row, not ok)
             shown += ok
         if words:
-            self.game_search.setToolTip(f"{shown} route(s) trouvée(s) · Entrée : sélectionner la première")
+            self.game_search.setToolTip(tr("editor.filter_game_routes.a0_route_s_trouvee_s", a0=shown))
 
     def select_first_game_route(self):
         for row in range(self.game_list.count()):
@@ -2466,6 +2554,11 @@ class RouteEditor(QMainWindow):
 
     def choose_route(self, row: int):
         self.target_kind = "mine"
+        if getattr(self, "provided_current", -1) >= 0:
+            self.provided_list.blockSignals(True)
+            self.provided_list.setCurrentRow(-1)
+            self.provided_list.blockSignals(False)
+            self.provided_current = -1
         self.selected_soldier = None  # choix de l'utilisateur : ne plus suivre le PNJ
         self.game_pick = None
         self.draw_pick()
@@ -2475,6 +2568,99 @@ class RouteEditor(QMainWindow):
         self.show_point()
         self.update_assign()
 
+    # -------------------------------------------------- routes fournies (lecture seule)
+    @staticmethod
+    def route_key(route: dict) -> str:
+        """Nom sous lequel une route est portee dans le jeu : une route fournie et
+        une route de l'utilisateur du meme nom ne se melangent pas."""
+        return ("fournie:" if route.get("_provided") else "") + route["name"]
+
+    def read_provided(self, zone: str) -> list[dict]:
+        try:
+            with open(os.path.join(PROVIDED_DIR, f"{zone}.json"), encoding="utf-8") as handle:
+                routes = json.load(handle).get("routes", [])
+        except (OSError, ValueError):
+            return []
+        for route in routes:
+            route["points"] = [upgrade_point(p) for p in route.get("points", [])]
+            route["_provided"] = True
+        return [r for r in routes if r["points"]]
+
+    def choose_provided(self, row: int):
+        """Route fournie choisie : montree sur la carte et cible de l'attribution."""
+        self.provided_current = row
+        if row >= 0:
+            self.target_kind = "provided"
+            self.selected_soldier = None
+            if self.game_pick is not None:
+                self.game_pick = None
+                self.draw_pick()
+            route = self.provided[row]
+            p = route["points"][0]
+            self.view.centerOn(to_scene(p["x"], p["z"]))
+        elif self.target_kind == "provided":
+            self.target_kind = "mine"
+        self.redraw_provided()
+        self.schedule_3d()
+        self.update_assign()
+
+    def redraw_provided(self):
+        for item in getattr(self, "_provided_items", []):
+            self.scene.removeItem(item)
+        self._provided_items = []
+        for r_index, route in enumerate(getattr(self, "provided", [])):
+            chosen = r_index == self.provided_current
+            pts = route["points"]
+            path = QPainterPath(to_scene(pts[0]["x"], pts[0]["z"]))
+            for q in pts[1:]:
+                path.lineTo(to_scene(q["x"], q["z"]))
+            if route.get("loop") and len(pts) > 2:
+                path.lineTo(to_scene(pts[0]["x"], pts[0]["z"]))
+            pen = cosmetic(PROVIDED_COLOR, 3 if chosen else 2)
+            pen.setStyle(Qt.PenStyle.DashLine)
+            line = self.scene.addPath(path, pen)
+            line.setOpacity(1.0 if chosen else 0.5)
+            line.setZValue(9)
+            line.setToolTip(tr("editor.provided.item", a0=route["name"], a1=len(pts)))
+            self._provided_items.append(line)
+            if chosen:
+                for q in pts:
+                    dot = QGraphicsEllipseItem(-4, -4, 8, 8, line)
+                    dot.setPen(QPen(Qt.PenStyle.NoPen))
+                    dot.setBrush(QBrush(QColor(PROVIDED_COLOR)))
+                    dot.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations)
+                    dot.setPos(to_scene(q["x"], q["z"]))
+
+    def provided_menu(self, pos):
+        if self.provided_list.itemAt(pos) is None:
+            return
+        self.provided_list.setCurrentItem(self.provided_list.itemAt(pos))
+        menu = QMenu(self)
+        menu.addAction(tr("editor.provided.copy"), self.copy_provided_route)
+        menu.exec(self.provided_list.mapToGlobal(pos))
+
+    def copy_provided_route(self):
+        """Copie modifiable de la route fournie choisie dans « Mes routes »."""
+        row = self.provided_list.currentRow()
+        if not 0 <= row < len(self.provided):
+            return
+        import copy
+        route = copy.deepcopy(self.provided[row])
+        route.pop("_provided", None)
+        names = {r["name"] for r in self.routes}
+        base = route["name"]
+        name, n = base, 2
+        while name in names:
+            name, n = f"{base} ({n})", n + 1
+        route["name"] = name
+        route.setdefault("color", "#f0883e")
+        self.routes.append(route)
+        self.current = len(self.routes) - 1
+        self.selected = -1
+        self.target_kind = "mine"
+        self.fill_lists()
+        self.changed()
+
     def copy_game_route(self):
         row = self.game_list.currentRow()
         if not 0 <= row < len(self.geom.routes):
@@ -2483,7 +2669,7 @@ class RouteEditor(QMainWindow):
         points = [user_point(*p.position, action=p.action, move=p.move, wait=p.wait, angle=p.angle, look=list(p.look),
                              flags=p.flags, param=p.param, param2=p.param2, param3=p.param3)
                   for p in route.points]
-        self.new_route(points, f"Copie de {route.ident:06X}")
+        self.new_route(points, tr("editor.copy_game_route.copie_de_a0_06x", a0=route.ident))
 
     def changed(self):
         self.target_kind = "mine"  # on vient de modifier une de mes routes
@@ -2530,6 +2716,7 @@ class RouteEditor(QMainWindow):
                 self.scene.addItem(item)
                 self._route_items.append(item)
         self._building = False
+        self.redraw_provided()
 
     @staticmethod
     def stack_range(pts: list, i: int) -> tuple[int, int]:
@@ -2683,8 +2870,8 @@ class RouteEditor(QMainWindow):
         pt = route.points[i]
         self.enable_point_panel(False)
         self.loop_check.setEnabled(False)
-        state = "modifiable en direct" if self.live else "lecture seule"
-        self.point_title.setText(f"Point {i + 1} / {len(route.points)} · route du jeu {route.ident:06X} ({state})")
+        state = tr("editor.show_game_point.modifiable_en_direct") if self.live else tr("editor.show_game_point.lecture_seule")
+        self.point_title.setText(tr("editor.show_game_point.point_a0_a1_route_du", a0=i + 1, a1=len(route.points), a2=route.ident, a3=state))
         for spin in self.coord.values():
             spin.setEnabled(self.live)
         self.user_fields.hide()
@@ -2699,8 +2886,8 @@ class RouteEditor(QMainWindow):
         stacked = [h for h in self.stacked_points(pt.position[0], pt.position[2]) if h != (r, i)]
         if stacked:
             names = ", ".join(f"{self.geom.routes[a].ident:06X} #{b + 1}" for a, b in stacked[:4])
-            self.stack_label.setText(f"{len(stacked)} autre(s) point(s) au même endroit : {names}"
-                                     + ("…" if len(stacked) > 4 else "") + ". Recliquer dessus pour passer de l'un à l'autre.")
+            self.stack_label.setText(tr("editor.show_game_point.a0_autre_s_point_s", a0=len(stacked), a1=names)
+                                     + ("…" if len(stacked) > 4 else "") + tr("editor.show_game_point.recliquer_dessus_pour_passer_de"))
         self.stack_label.setVisible(bool(stacked))
         self.update_live_box()
         widgets = (*self.coord.values(), self.look_spin)
@@ -2827,7 +3014,7 @@ class RouteEditor(QMainWindow):
         self.target_kind = "mine"
         self.changed()
         self.reinject_if_needed()
-        self.live_message(f"Point posé en 3D à ({x:.0f}, {y:.0f}, {z:.0f}).")
+        self.live_message(tr("editor.place_point_3d.point_pose_en_3d_a", a0=x, a1=y, a2=z))
 
     def nearest_segment(self, x: float, z: float) -> int:
         pts = self.route()["points"]
@@ -2877,8 +3064,7 @@ class RouteEditor(QMainWindow):
         if point is not None:
             first, last = self.stack_range(route["points"], self.selected)
             if last > first:
-                self.stack_label.setText(f"Points {first + 1} à {last + 1} au même endroit (point {self.selected + 1} "
-                                         "affiché). Recliquer dessus ou Précédent / Suivant pour passer de l'un à l'autre.")
+                self.stack_label.setText(tr("editor.show_point.points_a0_a_a1_au", a0=first + 1, a1=last + 1, a2=self.selected + 1))
                 self.stack_label.show()
         self.assign_box.show()
         self.loop_check.show()
@@ -2890,9 +3076,9 @@ class RouteEditor(QMainWindow):
         self.loop_check.setEnabled(route is not None)
         self.loop_check.blockSignals(False)
         if point is None:
-            self.point_title.setText(f"{route['name']} · aucun point choisi" if route else "Aucune route")
+            self.point_title.setText(tr("editor.show_point.a0_aucun_point_choisi", a0=route['name']) if route else tr("editor.show_point.aucune_route"))
             return
-        self.point_title.setText(f"Point {self.selected + 1} · {route['name']}")
+        self.point_title.setText(tr("editor.show_point.point_a0_a1", a0=self.selected + 1, a1=route['name']))
         for spin in self.coord.values():
             spin.blockSignals(True)
         for key, spin in self.coord.items():
@@ -2940,7 +3126,7 @@ class RouteEditor(QMainWindow):
         else:
             return
         if self.game_location and self.game_location[0] != self.zone:
-            QMessageBox.information(self, "TP Snake ici", f"Snake est en {self.game_location[0]}, pas en {self.zone}.")
+            QMessageBox.information(self, tr("editor.build_right.tp_snake_ici"), tr("editor.teleport_here.snake_est_en_a0_pas", a0=self.game_location[0], a1=self.zone))
             return
         self.link.teleport(p["x"], p["y"] + 100, p["z"])
 
@@ -2954,7 +3140,7 @@ class RouteEditor(QMainWindow):
     def export_routes(self):
         if not self.zone:
             return
-        path, _ = QFileDialog.getSaveFileName(self, "Exporter les routes", f"routes_{self.zone}.json", "JSON (*.json)")
+        path, _ = QFileDialog.getSaveFileName(self, tr("editor.export_routes.exporter_les_routes"), f"routes_{self.zone}.json", tr("editor.export_routes.json_json"))
         if path:
             with open(path, "w", encoding="utf-8") as handle:
                 json.dump({"zone": self.zone, "routes": self.routes}, handle, ensure_ascii=False, indent=1)
@@ -2965,13 +3151,13 @@ class RouteEditor(QMainWindow):
         if not state:
             self.snake = None
             self.game_location = None
-            self.link_label.setText("Jeu non connecté")
+            self.link_label.setText(tr("editor.build_bar.jeu_non_connecte"))
             self._set_pill(False)
         else:
             self.game_location = state.get("location")
             self.follow_zone_change()
             here = self.game_location[0] if self.game_location else "?"
-            self.link_label.setText(f"●  Connecté au jeu · {here}")
+            self.link_label.setText(tr("editor.poll_game.connecte_au_jeu_a0", a0=here))
             self._set_pill(True)
             self.snake = state.get("snake") if self.game_location and self.game_location[0] == self.zone else None
             self.snake_yaw = state.get("yaw")
@@ -3037,9 +3223,9 @@ class RouteEditor(QMainWindow):
             else:
                 item.setBrush(QBrush(QColor("#10151c")))
                 item.setPen(QPen(color, 3))
-            text = f"{self.npc_label(soldier)} · hauteur {y:.0f}" if soldier.get("class") else f"PNJ · hauteur {y:.0f}"
+            text = tr("editor.draw_soldiers.a0_hauteur_a1_0f", a0=self.npc_label(soldier), a1=y) if soldier.get("class") else tr("editor.draw_soldiers.pnj_hauteur_a0_0f", a0=y)
             if route:
-                text += f"\nSuit la route {route:06X}, vers le point {soldier['point'] + 1}"
+                text += tr("editor.draw_soldiers.suit_la_route_a0_06x", a0=route, a1=soldier['point'] + 1)
             item.setToolTip(text)
             item.setVisible(self.layer_checks["soldiers"].isChecked())
         for item in self._soldier_items[len(self.soldiers):]:
@@ -3076,14 +3262,14 @@ class RouteEditor(QMainWindow):
     # -------------------------------------------------- PNJ : attribution d'une route
     def npc_label(self, npc: dict) -> str:
         name = NPC_NAMES.get(npc["class"], npc["class"])
-        camp = CAMP_NAMES.get(npc["camp"], "allié" if npc["camp"] >= 0x80 else f"camp {npc['camp']}")
-        route = f"{npc['route']:06X}" if npc["route"] else "sans route"
+        camp = CAMP_NAMES.get(npc["camp"], tr("editor.npc_label.allie") if npc["camp"] >= 0x80 else tr("editor.npc_label.camp_a0", a0=npc['camp']))
+        route = f"{npc['route']:06X}" if npc["route"] else tr("editor.npc_label.sans_route")
         far = ""
         if self.snake:
             d = math.hypot(npc["position"][0] - self.snake[0], npc["position"][2] - self.snake[2]) / 1000
             far = f" · {d:.0f} m"
-        mark = " · route donnée" if npc["actor"] in self.npc_backup else ""
-        dead = " · hors d'état" if npc.get("life") is not None and npc["life"] <= 0 else ""
+        mark = tr("editor.npc_label.route_donnee") if npc["actor"] in self.npc_backup else ""
+        dead = tr("editor.npc_label.hors_d_etat") if npc.get("life") is not None and npc["life"] <= 0 else ""
         return f"{name} ({camp}) · {route}{far}{mark}{dead}"
 
     def refresh_npcs(self):
@@ -3095,7 +3281,7 @@ class RouteEditor(QMainWindow):
         if not npcs:
             if combo.count() != 1 or combo.itemData(0) is not None:
                 combo.clear()
-                combo.addItem("Aucun PNJ (jeu non connecté ou autre zone)", None)
+                combo.addItem(tr("editor.refresh_npcs.aucun_pnj_jeu_non_connecte"), None)
         else:
             if combo.count() and combo.itemData(0) is None:
                 combo.clear()
@@ -3144,6 +3330,8 @@ class RouteEditor(QMainWindow):
         mine = self.route()
         if self.target_kind == "mine" and mine is not None:
             return None, mine
+        if self.target_kind == "provided" and 0 <= getattr(self, "provided_current", -1) < len(self.provided):
+            return None, self.provided[self.provided_current]
         row = self.assign_game_row
         return (self.geom.routes[row] if self.geom and row is not None and 0 <= row < len(self.geom.routes) else None), None
 
@@ -3153,29 +3341,29 @@ class RouteEditor(QMainWindow):
         self.update_inject_button()
         ok, why = False, ""
         if not self.live_allowed():
-            why = "Le jeu doit être dans la zone affichée."
+            why = tr("editor.update_assign.le_jeu_doit_etre_dans")
         elif npc is None:
-            why = "Choisis un PNJ."
+            why = tr("editor.update_assign.choisis_un_pnj")
         elif mine is not None and len(mine["points"]) < 2:
-            why = f"« {mine['name']} » doit avoir au moins 2 points."
+            why = tr("editor.update_assign.a0_doit_avoir_au_moins", a0=mine['name'])
         elif mine is None and route is None:
-            why = "Choisis une route (du jeu ou une des tiennes)."
+            why = tr("editor.update_assign.choisis_une_route_du_jeu")
         else:
             ok = True
             name = NPC_NAMES.get(npc["class"], npc["class"])
             if mine is not None:
-                carrier = self.injections.get(mine["name"])
-                where = f" (dans {carrier:06X})" if carrier else " (copiée dans une route libre)"
+                carrier = self.injections.get(self.route_key(mine))
+                where = tr("editor.update_assign.dans_a0_06x", a0=carrier) if carrier else tr("editor.update_assign.copiee_dans_une_route_libre")
                 why = f"{name} → « {mine['name']} »{where}."
             elif route.ident in self.assignable:
-                why = f"{name} → route {route.ident:06X} ({len(route.points)} points)."
+                why = tr("editor.update_assign.a0_route_a1_06x_a2", a0=name, a1=route.ident, a2=len(route.points))
             else:
-                why = f"{name} → route {route.ident:06X}, copiée dans une route libre (elle n'est rangée dans aucun groupe)."
+                why = tr("editor.update_assign.a0_route_a1_06x_copiee", a0=name, a1=route.ident)
             if npc["record"] is None:
-                why += " Attention : ce PNJ n'a pas de fiche de route, essai non vérifié."
+                why += tr("editor.update_assign.attention_ce_pnj_n_a")
             missing = self.missing_anims(npc["class"], route, mine)
             if missing:
-                why += f" ⚠ T-pose probable : {', '.join(missing)} absente(s) pour ce type."
+                why += tr("editor.update_assign.t_pose_probable_a0_absente", a0=', '.join(missing))
         self.assign_button.setEnabled(ok)
         self.unassign_button.setEnabled(bool(self.live_allowed() and npc and npc["actor"] in self.npc_backup))
         self.assign_info.setText(why)
@@ -3201,8 +3389,8 @@ class RouteEditor(QMainWindow):
         """Allures / actions de la route marquees « T-pose » pour cette classe."""
         support = self.anim_support().get(klass, {})
         moves, actions = self.target_codes(route, mine)
-        out = [f"allure {c}" for c in sorted(moves) if support.get("move", {}).get(str(c)) is False]
-        out += [f"action {c}" for c in sorted(actions) if support.get("action", {}).get(str(c)) is False]
+        out = [tr("editor.missing_anims.allure_a0", a0=c) for c in sorted(moves) if support.get("move", {}).get(str(c)) is False]
+        out += [tr("editor.missing_anims.action_a0", a0=c) for c in sorted(actions) if support.get("action", {}).get(str(c)) is False]
         return out
 
     def edit_anim_support(self):
@@ -3215,11 +3403,10 @@ class RouteEditor(QMainWindow):
         moves, actions = self.target_codes(route, mine)
         support = self.anim_support().get(klass, {})
         dialog = QDialog(self)
-        dialog.setWindowTitle(f"Animations : {NPC_NAMES.get(klass, klass)}")
+        dialog.setWindowTitle(tr("editor.edit_anim_support.animations_a0", a0=NPC_NAMES.get(klass, klass)))
         dialog.setStyleSheet(STYLE)
         outer = QVBoxLayout(dialog)
-        note = QLabel(f"Pour les {NPC_NAMES.get(klass, klass)} ({klass}) : note ce que tu as constaté en jeu. "
-                      "« T-pose » = l'animation manque, l'éditeur préviendra avant d'attribuer une route qui l'utilise.")
+        note = QLabel(tr("editor.edit_anim_support.pour_les_a0_a1_note", a0=NPC_NAMES.get(klass, klass), a1=klass))
         note.setObjectName("hint")
         note.setWordWrap(True)
         outer.addWidget(note)
@@ -3227,14 +3414,15 @@ class RouteEditor(QMainWindow):
         grid.setHorizontalSpacing(10)
         names = self.action_names()
         combos = {}
-        rows = [("move", c, f"Allure {c} · {KNOWN_MOVES.get(c, 'inconnue')}") for c in sorted(moves)]
-        rows += [("action", c, f"Action {self.action_label(c, names)}") for c in sorted(actions)]
+        rows = [("move", c, tr("editor.edit_anim_support.allure_a0_a1", a0=c, a1=KNOWN_MOVES.get(c, tr("editor.edit_anim_support.inconnue")))) for c in sorted(moves)]
+        rows += [("action", c, tr("editor.edit_anim_support.action_a0", a0=self.action_label(c, names))) for c in sorted(actions)]
         if not rows:
-            rows = [("move", c, f"Allure {c} · {n}") for c, n in sorted(KNOWN_MOVES.items())]
+            rows = [("move", c, tr("editor.edit_anim_support.allure_a0_a1", a0=c, a1=n)) for c, n in sorted(KNOWN_MOVES.items())]
         for k, (kind, code, text) in enumerate(rows):
             grid.addWidget(QLabel(text), k, 0)
             combo = QComboBox()
-            for label, value in (("inconnu", None), ("fonctionne", True), ("T-pose", False)):
+            for label, value in ((tr("editor.edit_anim_support.inconnu"), None), (tr("editor.edit_anim_support.fonctionne"), True),
+                                 (tr("editor.edit_anim_support.t_pose"), False)):
                 combo.addItem(label, value)
             combo.setCurrentIndex(combo.findData(support.get(kind, {}).get(str(code))))
             grid.addWidget(combo, k, 1)
@@ -3242,9 +3430,9 @@ class RouteEditor(QMainWindow):
         outer.addLayout(grid)
         buttons = QHBoxLayout()
         buttons.addStretch(1)
-        cancel = QPushButton("Annuler")
+        cancel = QPushButton(tr("editor.edit_flag_bits.annuler"))
         cancel.clicked.connect(dialog.reject)
-        ok = QPushButton("Enregistrer")
+        ok = QPushButton(tr("editor.edit_anim_support.enregistrer"))
         ok.setObjectName("outline")
         ok.clicked.connect(dialog.accept)
         buttons.addWidget(cancel)
@@ -3274,16 +3462,16 @@ class RouteEditor(QMainWindow):
         et renvoie son identifiant ; None si aucune route libre ou si le jeu refuse."""
         carrier = self.injections.get(key) or self.free_carrier()
         if carrier is None:
-            self.live_message("Aucune route de PNJ libre dans cette zone pour porter cette route.")
+            self.live_message(tr("editor.carry.aucune_route_de_pnj_libre"))
             return None
         if carrier not in self.inject_backup:
             entry = self.link.route_entry(carrier)
             if entry is None:
-                self.live_message(f"Route porteuse {carrier:06X} introuvable : rien n'est écrit.")
+                self.live_message(tr("editor.carry.route_porteuse_a0_06x_introuvable", a0=carrier))
                 return None
             self.inject_backup[carrier] = entry
         if not self.link.inject_route(carrier, data):
-            self.live_message("Injection refusée (mémoire du jeu) : rien n'est écrit dans la table des routes.")
+            self.live_message(tr("editor.carry.injection_refusee_memoire_du_jeu"))
             return None
         self.injections[key] = carrier
         return carrier
@@ -3295,35 +3483,34 @@ class RouteEditor(QMainWindow):
             return
         # verification : l'acteur est toujours le meme (classe)
         if self.link.class_name(npc["actor"]) != npc["class"]:
-            self.live_message("Ce PNJ n'existe plus : rien n'est écrit.")
+            self.live_message(tr("editor.assign_route.ce_pnj_n_existe_plus"))
             return
         if npc["record"] is None and QMessageBox.question(
-                self, "PNJ sans fiche de route",
-                "Ce PNJ n'a pas de fiche de route (véhicule, poste fixe…). Lui en écrire une n'a jamais été "
-                "essayé : le jeu pourrait l'ignorer ou planter. Continuer ?") != QMessageBox.StandardButton.Yes:
+                self, tr("editor.assign_route.pnj_sans_fiche_de_route"),
+                tr("editor.assign_route.ce_pnj_n_a_pas")) != QMessageBox.StandardButton.Yes:
             return
         missing = self.missing_anims(npc["class"], route, mine)
         if missing and QMessageBox.question(
-                self, "Animations manquantes",
-                f"Pour ce type de PNJ, {', '.join(missing)} donne(nt) une T-pose. Attribuer quand même ?"
+                self, tr("editor.assign_route.animations_manquantes"),
+                tr("editor.assign_route.pour_ce_type_de_pnj", a0=', '.join(missing))
         ) != QMessageBox.StandardButton.Yes:
             return
         # route a donner : attribuable telle quelle, sinon copiee dans une route libre
         if mine is not None:
             if len(mine["points"]) < 2:
                 return
-            ident = self.carry(mine["name"], self.route_bytes(mine))
+            ident = self.carry(self.route_key(mine), self.route_bytes(mine))
             label = f"« {mine['name']} »"
         elif route.ident in self.assignable:
-            ident, label = route.ident, f"La route {route.ident:06X}"
+            ident, label = route.ident, tr("editor.assign_route.la_route_a0_06x", a0=route.ident)
         else:
             location = self.link.route_location(route.ident)
             data = self.link.read_points(*location) if location else None
             if not data:
-                self.live_message(f"Route {route.ident:06X} introuvable en mémoire : rien n'est écrit.")
+                self.live_message(tr("editor.write_game_bytes.route_a0_06x_introuvable_en", a0=route.ident))
                 return
             ident = self.carry(f"jeu:{route.ident:06X}", data)
-            label = f"La route {route.ident:06X}"
+            label = tr("editor.assign_route.la_route_a0_06x", a0=route.ident)
         if ident is None or ident not in self.assignable:
             return
         if npc["actor"] not in self.npc_backup:
@@ -3334,19 +3521,19 @@ class RouteEditor(QMainWindow):
         group, index = self.assignable[ident]
         if self.link.assign_route(npc["actor"], group, index, ident):
             self.live_message("")
-            carried = f" (portée par {ident:06X})" if mine is not None or (route and route.ident != ident) else ""
-            self.assign_info.setText(f"{label}{carried} est donnée : le PNJ la prend tout de suite, au point 1.")
+            carried = tr("editor.assign_route.portee_par_a0_06x", a0=ident) if mine is not None or (route and route.ident != ident) else ""
+            self.assign_info.setText(tr("editor.assign_route.a0_a1_est_donnee_le", a0=label, a1=carried))
             self.update_inject_button()
         else:
-            self.live_message("Écriture refusée par le jeu.")
+            self.live_message(tr("editor.write_game_bytes.ecriture_refusee_par_le_jeu"))
 
     # -------------------------------------------------- injection de mes routes
     def update_inject_button(self):
         mine = self.route()
         ok = bool(self.live_allowed() and self.target_kind == "mine" and mine and len(mine["points"]) >= 2)
         self.inject_button.setEnabled(ok)
-        self.inject_button.setText("Mettre à jour dans le jeu" if mine and mine["name"] in self.injections
-                                   else "Injecter dans le jeu")
+        self.inject_button.setText(tr("editor.update_inject_button.mettre_a_jour_dans_le") if mine and mine["name"] in self.injections
+                                   else tr("editor.build_right.injecter_dans_le_jeu"))
 
     def route_bytes(self, route: dict) -> bytes:
         """Points de ma route au format du jeu (0x30 octets chacun)."""
@@ -3382,7 +3569,7 @@ class RouteEditor(QMainWindow):
         if carrier is None:
             return
         self.live_message("")
-        self.assign_info.setText(f"« {mine['name']} » est dans le jeu (route {carrier:06X}).")
+        self.assign_info.setText(tr("editor.inject_route.a0_est_dans_le_jeu", a0=mine['name'], a1=carrier))
         self.update_inject_button()
 
     def reinject_if_needed(self):
@@ -3425,8 +3612,8 @@ class RouteEditor(QMainWindow):
         for item, animal in zip(self._animal_items, self.animals):
             x, y, z = animal["position"]
             item.setPos(to_scene(x, z))
-            species = ANIMAL_NAMES.get(animal.get("species"), animal.get("species") or "Animal")
-            item.setToolTip(f"{species} · hauteur {y:.0f}")
+            species = ANIMAL_NAMES.get(animal.get("species"), animal.get("species") or tr("editor.draw_animals.animal"))
+            item.setToolTip(tr("editor.draw_soldiers.a0_hauteur_a1_0f", a0=species, a1=y))
             item.setVisible(self.layer_checks["animals"].isChecked())
         for item in self._animal_items[len(self.animals):]:
             item.setVisible(False)
@@ -3459,7 +3646,7 @@ class RouteEditor(QMainWindow):
             self._snake_arrow = arrow
             arrow.setBrush(QBrush(QColor("#e6e9ef")))
             arrow.setPen(QPen(Qt.PenStyle.NoPen))
-            label = QGraphicsSimpleTextItem("Snake", self._snake_item)
+            label = QGraphicsSimpleTextItem(tr("editor.draw_snake.snake"), self._snake_item)
             font = QFont("Inter", 9)
             font.setBold(True)
             label.setFont(font)
@@ -3473,30 +3660,30 @@ class RouteEditor(QMainWindow):
         self._snake_arrow.setRotation(-yaw if yaw is not None else 0.0)
 
     def cursor_moved(self, pos: QPointF):
-        self.status_cursor.setText("Curseur ({:.0f}, {:.0f})".format(*from_scene(pos)))
+        self.status_cursor.setText(tr("editor.cursor_moved.curseur_0f_0f").format(*from_scene(pos)))
 
     def update_status(self):
         if self.zone:
-            progress = f" · progression {self.game_location[1]}" if self.game_location and self.game_location[0] == self.zone else ""
+            progress = tr("editor.update_status.progression_a0", a0=self.game_location[1]) if self.game_location and self.game_location[0] == self.zone else ""
             self.status_zone.setText(f"{self.zone}{progress}")
         if self.snake:
-            self.status_snake.setText("Snake ({:.0f}, {:.0f}, {:.0f})".format(*self.snake))
+            self.status_snake.setText(tr("editor.update_status.snake_0f_0f_0f").format(*self.snake))
             if self.soldiers:
-                self.status_snake.setText(self.status_snake.text() + f" · {len(self.soldiers)} PNJ")
+                self.status_snake.setText(self.status_snake.text() + tr("editor.update_status.a0_pnj", a0=len(self.soldiers)))
         elif self.game_location:
-            self.status_snake.setText(f"Snake en {self.game_location[0]}")
+            self.status_snake.setText(tr("editor.update_status.snake_en_a0", a0=self.game_location[0]))
         else:
-            self.status_snake.setText("Snake : jeu non lancé")
+            self.status_snake.setText(tr("editor.init.snake_jeu_non_lance"))
         points = sum(len(r["points"]) for r in self.routes)
         game = len(self.geom.routes) if self.geom else 0
-        self.status_count.setText(f"{len(self.routes)} route(s) · {points} point(s) · {game} routes du jeu · non injectées")
+        self.status_count.setText(tr("editor.update_status.a0_route_s_a1_point", a0=len(self.routes), a1=points, a2=game))
 
     def closeEvent(self, event):
         self.save_routes()
         if (self.live_backup or self.inject_backup) and self.game_location and (
                 self.game_location[0] == self.live_zone or self.inject_backup):
-            answer = QMessageBox.question(self, "Routes du jeu modifiées",
-                                          "Rétablir les routes du jeu modifiées avant de quitter ?")
+            answer = QMessageBox.question(self, tr("editor.build_right.routes_du_jeu_modifiees"),
+                                          tr("editor.closeevent.retablir_les_routes_du_jeu"))
             if answer == QMessageBox.StandardButton.Yes:
                 self.restore_game_routes(current_only=False)
         self.view3d.release_gl(final=True)  # textures liberees tant que la vue existe
@@ -3542,12 +3729,16 @@ def main():
     # boutons standard de Qt en francais (Oui / Non, OK / Annuler...)
     from PySide6.QtCore import QLibraryInfo, QLocale, QTranslator
     translator = QTranslator(app)
-    if translator.load(QLocale(QLocale.Language.French), "qtbase", "_",
+    if i18n.LANGUAGE == "fr" and translator.load(QLocale(QLocale.Language.French), "qtbase", "_",
                        QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)):
         app.installTranslator(translator)
     app.setStyleSheet(STYLE)
+    app_icon = os.path.join(i18n.BUNDLE_DIR, "assets", "MGS4_Route_Editor.ico")
+    if os.path.isfile(app_icon):
+        app.setWindowIcon(QIcon(app_icon))  # fenetre, dialogues et barre des taches
     window = RouteEditor()
     window.show()
+    QTimer.singleShot(3000, window.check_updates_at_launch)
     code = app.exec()
     try:
         with open(CRASH_LOG, "a", encoding="utf-8") as log:
