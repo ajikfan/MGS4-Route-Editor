@@ -22,12 +22,20 @@ PROCESS_NAME = "mgs4.exe"
 # petit-boutiens), base des decalages des routes)
 ADDRESSES = {
     0x6AE07392: (0x157A8E8, 0x238012D0, 0x238012E0, 0x2367B9D0, 0x23857630, 0x1C9DB88, 0x1BD54B0,
-                 0x23857640, 0x236507D0),  # 1.4.2
+                 0x23857640, 0x236507D0, 0xD66B00, 0x18D2C10),  # 1.4.2
 }
 REFERENCE = (0x1C28B28, 0x23EB5150, 0x23EB5160, 0x23D2F6D0, 0x23F0B5B0, 0x234F488, 0x22864B0,
-             0x23F0B5C0, 0x23D044D0)  # 1.4.1
-# dernier : liste des taches du jeu (noeud +0x20 suivant ; acteur en +0x90 ou
-# le noeud + 0xC0), ou sont les troupeaux d'animaux (classe AnimalManager)
+             0x23F0B5C0, 0x23D044D0, 0x123F3E0, 0x1F83410)  # 1.4.1
+# avant-dernier : liste des taches du jeu (noeud +0x20 suivant ; acteur en +0x90
+# ou le noeud + 0xC0), ou sont les troupeaux d'animaux (classe AnimalManager)
+# dernier : fonction de la tache d'un loup (2026-11-21, s04a30l) ; les loups
+# n'ont pas de classe C++ : une tache de premier niveau par loup (fonction en
+# +8), matrice monde en +0x2D0 (lignes de 16 octets), position au sol en +0x300.
+# 1.4.1 retrouvee par les 40 premiers octets de la fonction (correspondance unique)
+# puis : tableau global des instances de modele affichees (0x400 pointeurs ;
+# instance : +0x14 identifiant du .mdn, +0x20 matrice monde 4 x 4, ligne de
+# translation en dernier ; terrain et batiments = .mdn sans os en coordonnees
+# de la zone, matrice identite ; releve s03a10l 2026-11-21, 529 instances)
 # dernier : liste des groupes de routes (noeud +8 premier, +0x10 suivant, +0x18
 # famille, +0x20 nombre de groupes, +0x28 groupes ; groupe : +8 numero,
 # +0xF04 nombre de routes, +0xF28 routes de 0x10 octets, identifiant en +8)
@@ -58,6 +66,7 @@ SOLDIER_CAMP, SOLDIER_LIFE = 0x43D0, 0x42B0
 # (AnimalHen = poule, AnimalRatCuy = cochon d'Inde...), position en +0xC0.
 # Les animaux apparus par le trainer s'ajoutent au troupeau existant.
 ANIMAL_LIST, ANIMAL_LIST_END, ANIMAL_POSITION = 0x10, 0xC10, 0xC0
+WOLF_MATRIX, WOLF_POSITION = 0x2D0, 0x300
 STAGE_CODE = re.compile(r"s\d\da\d\d\w")
 
 
@@ -209,6 +218,52 @@ class GameLink:
                 node = self._q(node + 0x20)
         except OSError:
             pass
+        return out
+
+    def wolves(self) -> list[dict]:
+        """Loups de la zone : {"actor", "species", "position", "yaw"}."""
+        if not self.proc or len(self.addresses) <= 9:
+            return []
+        out = []
+        try:
+            head = self.base + self.addresses[8]
+            update = self.base + self.addresses[9]
+            node, seen = self._q(head + 0x20), set()
+            while node and node != head and node not in seen and len(seen) < 20000:
+                seen.add(node)
+                if self._q(node + 8) == update:
+                    m = struct.unpack("<12f", self.proc.read_bytes(node + WOLF_MATRIX, 48))
+                    position = struct.unpack("<3f", self.proc.read_bytes(node + WOLF_POSITION, 12))
+                    if all(v == v and abs(v) < 1e7 for v in position):
+                        out.append({"actor": node, "species": "Wolf", "position": position,
+                                    "yaw": math.atan2(m[8], m[10])})
+                node = self._q(node + 0x20)
+        except OSError:
+            pass
+        return out
+
+    def model_instances(self) -> list[tuple[int, tuple, tuple]]:
+        """(identifiant du .mdn, matrice monde, matrice du premier os) des modeles
+        affiches (16 flottants chacune). Pour un modele a os, c'est la matrice de
+        l'os qui place les sommets (+0x1E0 ; +0x20 parfois absurde, s01a20l)."""
+        if not self.proc or len(self.addresses) <= 10:
+            return []
+        out = []
+        try:
+            table = self.proc.read_bytes(self.base + self.addresses[10], 0x400 * 8)
+        except OSError:
+            return []
+        for pointer in struct.unpack("<1024Q", table):
+            if not 0x10000 <= pointer < 0x7FF000000000:
+                continue
+            try:
+                ident = struct.unpack("<I", self.proc.read_bytes(pointer + 0x14, 4))[0]
+                matrix = struct.unpack("<16f", self.proc.read_bytes(pointer + 0x20, 64))
+                bone = struct.unpack("<16f", self.proc.read_bytes(pointer + 0x1E0, 64))
+            except OSError:
+                continue
+            if all(v == v and abs(v) < 1e8 for v in matrix):
+                out.append((ident, matrix, bone))
         return out
 
     def animal_list(self, managers: list[int]) -> list[tuple[int, str]]:

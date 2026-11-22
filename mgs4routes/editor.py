@@ -18,6 +18,8 @@ import os
 import re
 import struct
 import sys
+import threading
+import time
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QImage, QBrush, QColor, QFont, QIcon, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
@@ -27,7 +29,7 @@ from PySide6.QtWidgets import (
     QGraphicsEllipseItem, QGraphicsItem, QGraphicsPathItem, QGraphicsPolygonItem, QGraphicsScene,
     QGraphicsSimpleTextItem, QGraphicsView, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QListWidget,
     QListWidgetItem, QMainWindow, QMenu, QMessageBox, QPushButton, QScrollArea, QSpinBox, QStackedWidget,
-    QStyledItemDelegate, QVBoxLayout,
+    QSplitter, QStyledItemDelegate, QVBoxLayout,
     QWidget,
 )
 
@@ -35,6 +37,8 @@ from mgs4routes import geom as geomlib
 from mgs4routes.game import NAV_TYPE, GameLink
 from mgs4routes.collision import MeshCache, clip_below
 from mgs4routes.nav import CellCache, NavIndex
+from mgs4routes.scene import SceneBuilder
+from mgs4routes.textures import TextureLibrary
 from mgs4routes.view3d import View3D
 from mgs4routes.vpak import STAGE_ARCHIVES, StageFiles
 
@@ -47,6 +51,7 @@ ROUTES_DIR = os.path.join(DATA_DIR, "routes")
 NAV_INDEX_FILE = os.path.join(DATA_DIR, "cache", "nv2_index.json")
 CELL_CACHE_DIR = os.path.join(DATA_DIR, "cache", "cells")
 MESH_CACHE_DIR = os.path.join(DATA_DIR, "cache", "meshes")
+TEXTURE_INDEX_FILE = os.path.join(DATA_DIR, "cache", "textures_index.json")  # + textures_256/
 DECOR_CUT = 3000  # mm au-dessus du niveau affiche : le decor plus haut est coupe (toits)
 DECOR_PIXELS, DECOR_MM_PER_PIXEL = 6000, 50  # image du decor en 2D : taille maximale, finesse
 DECOR_IMAGE_DIR = os.path.join(DATA_DIR, "cache", "decor2d")
@@ -128,7 +133,12 @@ POINT_FIELDS = {"flags": (0x0C, "<I"), "action": (0x1C, "<H"), "move": (0x1E, "<
 # Actions verifiees en jeu (trainer, 2026-11-07) ; les autres codes sont a
 # decouvrir : on peut les nommer dans l'editeur (action_names.json).
 KNOWN_ACTIONS = {1: "Passage", 3: "Poste debout", 4: "Poste accroupi", 5: "Se coucher sur le ventre",
-                 25: "Retour en réserve", 98: "Les mains sur la tête"}
+                 25: "Retour en réserve", 98: "Les mains sur la tête",
+                 # hypotheses (routes du jeu qui franchissent des obstacles, 2026-11-21) :
+                 # toujours proposees, meme si la zone ne s'en sert pas
+                 60: "En haut d'un rebord (hypothèse)", 46: "Sauter en bas (hypothèse)",
+                 30: "Réception après un saut (hypothèse)", 31: "Réception après un saut, variante (hypothèse)",
+                 47: "Arrêt minuté (hypothèse)", 42: "Fin de route, message au script (hypothèse)"}
 # Allures relevees en jeu (utilisateur, 2026-11-21)
 KNOWN_MOVES = {0: "Marche lente", 1: "Marche lente", 2: "Marche", 3: "Marche soutenue", 4: "Course",
                5: "Course accroupie", 6: "Marche accroupie en visant une cible", 12: "Course",
@@ -137,7 +147,8 @@ KNOWN_MOVES = {0: "Marche lente", 1: "Marche lente", 2: "Marche", 3: "Marche sou
                23: "Marche soutenue accroupie en visant droit devant",
                24: "Marche soutenue accroupie en visant une cible",
                25: "Marche à reculons soutenue accroupie en visant une cible",
-               27: "Marche les mains sur la tête"}
+               27: "Marche les mains sur la tête",
+               17: "Franchissement : escalade ou saut (hypothèse)"}
 WAIT_FOREVER = 0xFFFF
 # Classes (RTTI) des PNJ -> nom affiche ; camps : 1 PMC, 2 milice, 0 neutre, >= 0x80 allie
 NPC_NAMES = {"ENEMY_MIDEAST_PMC": "Soldat PMC", "ENEMY_MIDEAST_MIL": "Milicien",
@@ -519,6 +530,32 @@ class RouteCard(QWidget):
 ROLE_POINTS, ROLE_ASSIGNABLE, ROLE_MODIFIED = (Qt.ItemDataRole.UserRole + k for k in range(3))
 
 
+class DeselectableList(QListWidget):
+    """Liste ou l'on peut tout deselectionner : clic sur l'element deja choisi,
+    clic dans le vide ou Echap. La case a cocher garde son role."""
+    CHECK_ZONE = 26  # pixels a gauche : case a cocher
+
+    def mousePressEvent(self, event):
+        item = self.itemAt(event.position().toPoint())
+        on_check = item is not None and bool(item.flags() & Qt.ItemFlag.ItemIsUserCheckable) \
+            and event.position().x() < self.CHECK_ZONE
+        if event.button() == Qt.MouseButton.LeftButton and not on_check and (
+                item is None or (item is self.currentItem() and item.isSelected())):
+            self.clearSelection()
+            self.setCurrentRow(-1)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape and self.currentRow() >= 0:
+            self.clearSelection()
+            self.setCurrentRow(-1)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
 class GameRouteDelegate(QStyledItemDelegate):
     """Ligne de « Routes du jeu » dessinee directement : case a cocher et
     identifiant (dessin standard), pastilles PNJ / modif. et nombre de points
@@ -563,6 +600,8 @@ class GameRouteDelegate(QStyledItemDelegate):
 
 
 class RouteEditor(QMainWindow):
+    textured_ready = Signal(object, object)  # (cle, lots) du decor texture, depuis le fil de calcul
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("MGS4 Route Editor")
@@ -601,6 +640,9 @@ class RouteEditor(QMainWindow):
         self.npc_backup = {}          # acteur -> (classe, fiche d'origine) des PNJ a qui on a donne une route
         self.injections = {}          # nom de ma route -> route porteuse du jeu (identifiant)
         self.target_kind = "game"     # route a attribuer : "game" (route du jeu) ou "mine" (ma route)
+        # route du jeu a attribuer : choisie par l'utilisateur seulement (le suivi
+        # d'un PNJ selectionne sa route sur la carte sans la changer, 2026-11-21)
+        self.assign_game_row = None
         self.inject_backup = {}       # route porteuse -> (adresse de l'entree, 16 octets d'origine)
         self.assignable = {}          # identifiant de route -> (groupe, index), lu dans le jeu
         self._assignable_zone = None
@@ -628,6 +670,8 @@ class RouteEditor(QMainWindow):
         body.addWidget(self._build_left())
         self.view3d = View3D()
         self.view3d.status.connect(self.live_message)
+        self.view3d.picked.connect(self.pick_3d)
+        self.view3d.placed.connect(self.place_point_3d)
         self.map_stack = QStackedWidget()
         self.map_stack.addWidget(self.view)
         self.map_stack.addWidget(self.view3d)
@@ -683,6 +727,12 @@ class RouteEditor(QMainWindow):
         follow.setToolTip("Afficher la zone où se trouve Snake")
         follow.clicked.connect(self.go_to_game_zone)
         row.addWidget(follow)
+        self.follow_game_zone = QCheckBox("Suivre le jeu")
+        self.follow_game_zone.setToolTip("Charger automatiquement la carte quand le jeu change de zone")
+        self.follow_game_zone.setChecked(bool(_settings().get("route_editor_follow_zone", True)))
+        self.follow_game_zone.toggled.connect(lambda on: _save_setting("route_editor_follow_zone", on))
+        self.follow_game_zone.setStyleSheet("background: transparent;")
+        row.addWidget(self.follow_game_zone)
         seg = QFrame()
         seg.setStyleSheet("QFrame { border: 1px solid #2f3846; border-radius: 6px; }")
         seg.setFixedHeight(34)
@@ -734,9 +784,22 @@ class RouteEditor(QMainWindow):
         panel = QFrame()
         panel.setObjectName("left")
         panel.setFixedWidth(280)
-        col = QVBoxLayout(panel)
-        col.setContentsMargins(8, 16, 8, 0)
+        outer = QVBoxLayout(panel)
+        outer.setContentsMargins(8, 16, 8, 0)
+        outer.setSpacing(0)
+        # trois blocs (mes routes, routes du jeu, calques) dans un separateur
+        # reglable a la souris ; tailles gardees dans les reglages
+        self.left_split = QSplitter(Qt.Orientation.Vertical)
+        self.left_split.setChildrenCollapsible(False)
+        self.left_split.setHandleWidth(7)
+        self.left_split.setStyleSheet("QSplitter::handle { background: transparent; border-top: 1px solid #2a313c; margin: 2px 24px; }"
+                                      "QSplitter::handle:hover { border-top: 2px solid #f0883e; }")
+        outer.addWidget(self.left_split)
+        top = QWidget()
+        col = QVBoxLayout(top)
+        col.setContentsMargins(0, 0, 0, 4)
         col.setSpacing(6)
+        self.left_split.addWidget(top)
         head = QHBoxLayout()
         head.setContentsMargins(8, 0, 0, 0)
         head.addWidget(_section("Mes routes"))
@@ -747,15 +810,20 @@ class RouteEditor(QMainWindow):
         head.addWidget(new)
         col.addLayout(head)
         self.route_list = QListWidget()
-        self.route_list.setMaximumHeight(220)
+        self.route_list.setMinimumHeight(56)
         self.route_list.currentRowChanged.connect(self.choose_route)
         self.route_list.itemDoubleClicked.connect(lambda _item: self.rename_route())
         self.route_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.route_list.customContextMenuRequested.connect(self.route_menu)
         self.route_list.setToolTip("Double-clic : renommer · clic droit : renommer, supprimer")
         col.addWidget(self.route_list)
+        middle = QWidget()
+        col = QVBoxLayout(middle)
+        col.setContentsMargins(0, 6, 0, 4)
+        col.setSpacing(6)
+        self.left_split.addWidget(middle)
         head = QHBoxLayout()
-        head.setContentsMargins(8, 12, 8, 0)
+        head.setContentsMargins(8, 4, 8, 0)
         head.addWidget(_section("Routes du jeu"))
         head.addStretch(1)
         for text, on in (("Tout", True), ("Aucune", False)):
@@ -765,7 +833,15 @@ class RouteEditor(QMainWindow):
             button.clicked.connect(lambda _c=False, v=on: self.show_all_game_routes(v))
             head.addWidget(button)
         col.addLayout(head)
-        self.game_list = QListWidget()
+        self.game_search = QLineEdit()
+        self.game_search.setPlaceholderText("Rechercher une route (ex. fa83, PNJ)")
+        self.game_search.setClearButtonEnabled(True)
+        self.game_search.setToolTip("Filtre par identifiant (morceau en hexadécimal) ; « PNJ » : routes attribuables. "
+                                    "Entrée : sélectionner la première trouvée")
+        self.game_search.textChanged.connect(self.filter_game_routes)
+        self.game_search.returnPressed.connect(self.select_first_game_route)
+        col.addWidget(self.game_search)
+        self.game_list = DeselectableList()
         self.game_list.setItemDelegate(GameRouteDelegate(self.game_list))
         self.game_list.setUniformItemSizes(True)
         self.game_list.setStyleSheet(f"QListWidget {{ font-family: {MONO}; font-size: 12px; }}"
@@ -778,7 +854,9 @@ class RouteEditor(QMainWindow):
         self.game_list.currentRowChanged.connect(self.highlight_game_route)
         self.game_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.game_list.customContextMenuRequested.connect(self.game_route_menu)
-        self.game_list.setToolTip("Clic : la montrer · clic droit : copier dans mes routes")
+        self.game_list.setToolTip("Clic : la montrer · re-clic, clic dans le vide ou Échap : la désélectionner · "
+                                  "clic droit : copier dans mes routes")
+        self.game_list.setMinimumHeight(120)
         col.addWidget(self.game_list, stretch=1)
         layers = QFrame()
         layers.setObjectName("layers")
@@ -789,6 +867,7 @@ class RouteEditor(QMainWindow):
         lay.addWidget(_section("Calques"))
         self.layer_checks = {}
         for key, text in (("soldiers", "PNJ (en direct)"), ("animals", "Animaux (en direct)"),
+                          ("textured", "Décor texturé (jeu en direct)"),
                           ("decor", "Décor (formes de collision)"),
                           ("floor", "Sol praticable"),
                           ("walls", "Murs et obstacles"), ("passages", "Passages entre cellules"),
@@ -831,7 +910,20 @@ class RouteEditor(QMainWindow):
         self.blocks_label.setObjectName("hint")
         self.blocks_label.setWordWrap(True)
         lay.addWidget(self.blocks_label)
-        col.addWidget(layers)
+        scroll = QScrollArea()  # les calques defilent s'ils manquent de place
+        scroll.setWidget(layers)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setMinimumHeight(90)
+        scroll.setStyleSheet("QScrollArea { background: transparent; }")
+        self.left_split.addWidget(scroll)
+        self.left_split.setStretchFactor(0, 0)
+        self.left_split.setStretchFactor(1, 1)
+        self.left_split.setStretchFactor(2, 0)
+        saved = _settings().get("route_editor_left_split")
+        self.left_split.setSizes(saved if isinstance(saved, list) and len(saved) == 3 else [130, 420, 380])
+        self.left_split.splitterMoved.connect(lambda *_a: _save_setting("route_editor_left_split", self.left_split.sizes()))
         return panel
 
     def _build_right(self) -> QFrame:
@@ -1389,6 +1481,10 @@ class RouteEditor(QMainWindow):
         self.nav = NavIndex(self.files, NAV_INDEX_FILE)
         self.cell_cache = CellCache(self.files, CELL_CACHE_DIR)
         self.mesh_cache = MeshCache(self.files, MESH_CACHE_DIR)
+        self.textures = TextureLibrary(self.files, root, TEXTURE_INDEX_FILE)
+        self.scene_builder = SceneBuilder(self.files, self.textures)
+        self._textured_key, self._textured_busy = None, False
+        self.textured_ready.connect(self.textured_done)
 
         def progress(i, n):
             if i % 10 == 0:
@@ -1403,6 +1499,20 @@ class RouteEditor(QMainWindow):
     def go_to_game_zone(self):
         if self.game_location and self.game_location[0] in getattr(self, "geoms", {}):
             self.load_zone(self.game_location[0])
+
+    def follow_zone_change(self):
+        """Le jeu vient de changer de zone : la carte suit (case « Suivre le jeu »).
+        Seulement au changement, pour laisser consulter une autre zone a la main."""
+        game_zone = self.game_location[0] if self.game_location else None
+        previous = getattr(self, "_followed_game_zone", None)
+        if not game_zone or game_zone == previous:
+            return
+        if self.dragging_game_point:
+            return  # on reessaie au releve suivant
+        self._followed_game_zone = game_zone
+        if (self.follow_game_zone.isChecked() and game_zone != self.zone
+                and game_zone in getattr(self, "geoms", {})):
+            self.load_zone(game_zone)
 
     # -------------------------------------------------- zone
     def load_zone(self, zone: str):
@@ -1430,6 +1540,7 @@ class RouteEditor(QMainWindow):
         self.dragging_game_point = False
         self.walls_3d_dirty = True
         self.game_pick = None
+        self.assign_game_row = None
         self._snake_item = None
         self.draw_game_layers()
         self.draw_walls()
@@ -1530,9 +1641,12 @@ class RouteEditor(QMainWindow):
             button.setChecked(button.text() == mode)
         if mode == "3D":
             self.map_stack.setCurrentWidget(self.view3d)
-            center = self.view.mapToScene(self.view.viewport().rect().center())
-            cx, cz = from_scene(center)
-            self.view3d.look_at(cx, self.level, cz)
+            if self.snake:  # Snake dans la zone affichee : la vue s'ouvre sur lui
+                self.view3d.look_at(*self.snake, distance=35.0)
+            else:
+                center = self.view.mapToScene(self.view.viewport().rect().center())
+                cx, cz = from_scene(center)
+                self.view3d.look_at(cx, self.level, cz, distance=35.0)
             self.walls_3d_dirty = True
             self.refresh_3d()
             self.view.hint.hide()
@@ -1544,6 +1658,90 @@ class RouteEditor(QMainWindow):
         """Hauteur la plus frequente des points de route (le sol de la zone)."""
         heights = [round(p.position[1], -2) for r in (self.geom.routes if self.geom else []) for p in r.points]
         return max(set(heights), key=heights.count) if heights else 0.0
+
+    # -------------------------------------------------- decor texture (modeles affiches par le jeu)
+    def textured_wanted_key(self):
+        """Cle du decor texture a afficher, None si rien (calque decoche, jeu ailleurs)."""
+        if (not hasattr(self, "scene_builder") or not self.layer_checks["textured"].isChecked()
+                or not (self.game_location and self.game_location[0] == self.zone)):
+            return None
+        # une seule fois par zone : la coupe au-dessus du niveau se fait dans la
+        # carte graphique (View3D.set_cut). Avec le niveau dans la cle, le niveau
+        # Auto (hauteur de Snake) relancait l'assemblage sans fin et figeait
+        # l'editeur (2026-11-21).
+        return (self.zone,)
+
+    def update_textured(self):
+        """Lance l'assemblage en arriere-plan si la zone ou le niveau a change."""
+        key = self.textured_wanted_key()
+        if key is None:
+            if self._textured_key is not None:
+                self._textured_key = None
+                self.view3d.set_textured([])
+                self.walls_3d_dirty = True
+                self.schedule_3d()
+            return
+        if key == self._textured_key or self._textured_busy:
+            return
+        instances = self.link.model_instances()
+        if not instances:
+            return
+        self._textured_busy = True
+        first = self.textures._global is None and not os.path.exists(TEXTURE_INDEX_FILE)
+        self.statusBar().showMessage("Décor texturé : première fois, index des textures du jeu (environ 20 s)…" if first
+                                     else "Décor texturé : lecture des modèles et des textures…")
+
+        def work():
+            batches = None
+            try:
+                self.textures.set_zone(key[0])
+                # le fil laisse souvent la main : l'interface reste fluide (verrou de Python)
+                batches = self.scene_builder.build(instances, progress=lambda _k, _n: time.sleep(0.002))
+            except Exception as error:  # le fil ne doit jamais tomber sans prevenir
+                batches = error
+            self.textured_ready.emit(key, batches)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    @staticmethod
+    def textured_covers(batches, snake, radius: float = 40.0, minimum: int = 300) -> bool:
+        """Au moins `minimum` sommets du decor texture a moins de `radius` m de Snake."""
+        import numpy as np
+        sx, _sy, sz = snake
+        near = 0
+        for array, *_rest in batches:
+            d = np.hypot(array[:, 0] + sx / 1000.0, array[:, 2] + sz / 1000.0)
+            near += int((d < radius).sum())
+            if near >= minimum:
+                return True
+        return False
+
+    def textured_done(self, key, batches):
+        self._textured_busy = False
+        if isinstance(batches, Exception) or batches is None:
+            self.statusBar().showMessage(f"Décor texturé impossible : {batches}", 8000)
+            return
+        if key != self.textured_wanted_key():  # zone ou niveau change entre-temps
+            self.schedule_3d()
+            return
+        # repli : decor texture qui ne couvre pas les environs de Snake (zone dont
+        # le terrain n'est pas dans le tableau des instances, s01a20l) -> on garde
+        # le decor de collision plutot qu'une vue vide
+        if self.snake and not self.textured_covers(batches, self.snake):
+            self._textured_key = key  # pas de nouvel essai en boucle dans cette zone
+            self._textured_useless = True
+            self.view3d.set_textured([])
+            self.statusBar().showMessage("Décor texturé indisponible dans cette zone : décor de collision affiché", 8000)
+            self.walls_3d_dirty = True
+            self.schedule_3d()
+            return
+        self._textured_useless = False
+        self._textured_key = key
+        self.view3d.set_textured(batches)
+        triangles = sum(len(b[0]) for b in batches) // 3
+        self.statusBar().showMessage(f"Décor texturé : {triangles:,} triangles, {len(batches)} textures".replace(",", " "), 6000)
+        self.walls_3d_dirty = True
+        self.schedule_3d()
 
     def schedule_3d(self):
         """Mise a jour de la 3D apres l'evenement en cours (regroupe les appels)."""
@@ -1560,7 +1758,8 @@ class RouteEditor(QMainWindow):
             # coupe comme un plan d'architecte : rien au-dessus du niveau affiche + 2 m
             cut = [c for c in self.cells if c["floor"] <= self.level + LEVEL_ABOVE]
             floors, walls = [], []
-            decor = self.layer_checks["decor"].isChecked()
+            decor = self.layer_checks["decor"].isChecked() or (
+                getattr(self, "_textured_key", None) is not None and not getattr(self, "_textured_useless", False))
             for c in (cut if not decor else []):  # avec le decor, sols et murs de navigation font doublon
                 if c.get("kind") == "obstacle":  # bloc : dessus a la hauteur libre, cotes en murs
                     top = min(c.get("clearance", WALL_HEIGHT_3D), WALL_HEIGHT_3D)
@@ -1576,8 +1775,11 @@ class RouteEditor(QMainWindow):
                     walls += [(*w, c["floor"], WALL_HEIGHT_3D) for w in c["walls"]]
             self.view3d.set_world(floors, walls, self.level)
             self.view3d.set_decor(self.decor_triangles() if self.layer_checks["decor"].isChecked() else None)
+            self.view3d.set_pick_surface(self.decor_triangles())  # outil Point en 3D : surfaces de collision
             self.walls_3d_dirty = False
-        polylines, markers = [], []
+        self.view3d.set_cut(self.level + DECOR_CUT)
+        self.update_textured()
+        polylines, markers, picks = [], [], []
         if self.layer_checks["routes"].isChecked():
             shown = self.visible_game_routes()
             modified = set(self.live_backup) if self.live_zone == self.zone else set()
@@ -1594,26 +1796,72 @@ class RouteEditor(QMainWindow):
                 else:
                     continue
                 polylines.append(([p.position for p in route.points], color, True))
+                picks += [(("game", index, i), p.position) for i, p in enumerate(route.points)]
         for r_index, route in enumerate(self.routes):
             if route.get("hidden") and r_index != self.current:
                 continue
             pts = [(p["x"], p["y"], p["z"]) for p in route["points"]]
+            picks += [(("mine", r_index, i), xyz) for i, xyz in enumerate(pts)]
             if route.get("loop") and len(pts) > 2:
                 pts.append(pts[0])
             polylines.append((pts, route["color"], True))
         if self.game_pick is not None:
             r, i = self.game_pick
             markers.append((self.geom.routes[r].points[i].position, "#ffffff", 0.9))
+        elif self.route() is not None and 0 <= self.selected < len(self.route()["points"]):
+            q = self.route()["points"][self.selected]
+            markers.append(((q["x"], q["y"], q["z"]), "#ffffff", 0.9))
+        actors = []
         if self.layer_checks["soldiers"].isChecked():
             for soldier in self.soldiers:
                 chosen = soldier["actor"] == self.selected_soldier
                 color = ACCENT if chosen else camp_color(soldier.get("camp", 1))
-                markers.append((soldier["position"], color, 1.8))
+                actors.append({"position": soldier["position"], "color": color, "height": 1.8,
+                               "yaw": self.npc_heading(soldier), "selected": chosen})
         if self.layer_checks["animals"].isChecked():
-            markers += [(animal["position"], ANIMAL_COLOR, 0.5) for animal in self.animals]
+            actors += [{"position": a["position"], "color": ANIMAL_COLOR,
+                        "height": 0.8 if a.get("species") == "Wolf" else 0.5, "yaw": a.get("yaw")}
+                       for a in self.animals]
         if self.snake:
-            markers.append((self.snake, "#e6e9ef", 1.8))
+            yaw = getattr(self, "snake_yaw", None)
+            actors.append({"position": self.snake, "color": "#f4f6fa", "height": 1.8,
+                           "yaw": math.radians(yaw) if yaw is not None else None})
         self.view3d.set_overlay(polylines, markers)
+        self.view3d.set_actors(actors)
+        self.view3d.set_pick_points(picks)
+
+    def npc_heading(self, npc: dict) -> float | None:
+        """Orientation d'un PNJ (radians, 0 = +Z) deduite de son deplacement ;
+        garde la derniere connue quand il s'arrete."""
+        headings = self.__dict__.setdefault("_npc_headings", {})
+        last = self.__dict__.setdefault("_npc_last_pos", {})
+        x, _y, z = npc["position"]
+        previous = last.get(npc["actor"])
+        last[npc["actor"]] = (x, z)
+        if previous and math.hypot(x - previous[0], z - previous[1]) > 30:
+            headings[npc["actor"]] = math.atan2(x - previous[0], z - previous[1])
+        return headings.get(npc["actor"])
+
+    def pick_3d(self, key):
+        """Clic sur un point dans la vue 3D : meme selection qu'en 2D."""
+        kind, r, i = key
+        self.selected_soldier = None
+        if kind == "game":
+            if 0 <= r < len(self.geom.routes) and i < len(self.geom.routes[r].points):
+                self.select_game_point(r, i)
+        elif 0 <= r < len(self.routes) and i < len(self.routes[r]["points"]):
+            self.target_kind = "mine"
+            if self.game_pick is not None:
+                self.game_pick = None
+                self.draw_pick()
+            self.current, self.selected = r, i
+            self.route_list.blockSignals(True)
+            self.route_list.setCurrentRow(r)
+            self.route_list.blockSignals(False)
+            self.redraw_routes()
+            self.show_point()
+            self.update_assign()
+        self.schedule_3d()
 
     # -------------------------------------------------- edition en direct des routes du jeu
     def live_allowed(self) -> bool:
@@ -2060,7 +2308,7 @@ class RouteEditor(QMainWindow):
         self.draw_walls()
 
     def show_layer(self, key: str, on: bool):
-        if key in ("walls", "floor", "passages", "decor"):
+        if key in ("walls", "floor", "passages", "decor", "textured"):
             self.walls_3d_dirty = True
         self.schedule_3d()
         if key == "soldiers":
@@ -2122,6 +2370,7 @@ class RouteEditor(QMainWindow):
             self.game_list.addItem(item)
         self.game_list.setUpdatesEnabled(True)
         self.game_list.blockSignals(False)
+        self.filter_game_routes()
         self.update_live_box()
         self.update_game_route_marks()
 
@@ -2190,8 +2439,34 @@ class RouteEditor(QMainWindow):
         menu.addAction("Copier dans mes routes", self.copy_game_route)
         menu.exec(self.game_list.mapToGlobal(pos))
 
+    def filter_game_routes(self, _text: str = ""):
+        """Liste des routes du jeu filtree par le champ de recherche : morceaux
+        d'identifiant (hexadecimal, sans tenir compte de la casse) ; le mot
+        « pnj » garde les routes attribuables."""
+        if not hasattr(self, "game_search") or self.geom is None:
+            return
+        words = self.game_search.text().strip().upper().replace("0X", "").split()
+        want_npc = "PNJ" in words
+        parts = [w for w in words if w != "PNJ"]
+        shown = 0
+        for row, route in enumerate(self.geom.routes):
+            ident = f"{route.ident:06X}"
+            ok = all(w in ident for w in parts) and (not want_npc or route.ident in self.assignable)
+            self.game_list.setRowHidden(row, not ok)
+            shown += ok
+        if words:
+            self.game_search.setToolTip(f"{shown} route(s) trouvée(s) · Entrée : sélectionner la première")
+
+    def select_first_game_route(self):
+        for row in range(self.game_list.count()):
+            if not self.game_list.isRowHidden(row):
+                self.game_list.setCurrentRow(row)  # surlignage, centrage et cible de l'attribution
+                self.game_list.scrollToItem(self.game_list.item(row))
+                return
+
     def choose_route(self, row: int):
         self.target_kind = "mine"
+        self.selected_soldier = None  # choix de l'utilisateur : ne plus suivre le PNJ
         self.game_pick = None
         self.draw_pick()
         self.current = row
@@ -2285,6 +2560,7 @@ class RouteEditor(QMainWindow):
         if center:  # choix de l'utilisateur dans la liste : ne plus suivre le soldat
             self.selected_soldier = None
             self.target_kind = "game"
+            self.assign_game_row = row
         if hasattr(self, "assign_button"):
             self.update_assign()
         if self._highlight is not None:
@@ -2359,8 +2635,10 @@ class RouteEditor(QMainWindow):
             self.live_state[route.ident] = data
         return changed
 
-    def select_game_point(self, r: int, i: int):
-        self.target_kind = "game"
+    def select_game_point(self, r: int, i: int, user: bool = True):
+        if user:  # choix de l'utilisateur : devient la route a attribuer
+            self.target_kind = "game"
+            self.assign_game_row = r
         if self.live and self.sync_route_from_game(r):
             self.redraw_game_route(r)
         self.game_pick = (r, i)
@@ -2439,6 +2717,7 @@ class RouteEditor(QMainWindow):
     # -------------------------------------------------- outils
     def set_tool(self, tool: str):
         self.tool = tool
+        self.view3d.place_mode = tool in ("point", "insert")
         self.tool_buttons[tool].setChecked(True)
         self.view.set_hint(TOOL_HINTS[tool])
         self.draw_pick()
@@ -2530,6 +2809,25 @@ class RouteEditor(QMainWindow):
             pts.append(new)
             self.selected = len(pts) - 1
         self.changed()
+
+    def place_point_3d(self, x: float, y: float, z: float):
+        """Outil Point en 3D : point pose sur la surface cliquee (dessus d'un
+        muret, marche...), a sa hauteur exacte."""
+        if self.route() is None:
+            self.new_route()
+        pts = self.route()["points"]
+        new = user_point(x, y, z)
+        if self.tool == "insert" and len(pts) >= 2:
+            index = self.nearest_segment(x, z) + 1
+            pts.insert(index, new)
+            self.selected = index
+        else:
+            pts.append(new)
+            self.selected = len(pts) - 1
+        self.target_kind = "mine"
+        self.changed()
+        self.reinject_if_needed()
+        self.live_message(f"Point posé en 3D à ({x:.0f}, {y:.0f}, {z:.0f}).")
 
     def nearest_segment(self, x: float, z: float) -> int:
         pts = self.route()["points"]
@@ -2671,6 +2969,7 @@ class RouteEditor(QMainWindow):
             self._set_pill(False)
         else:
             self.game_location = state.get("location")
+            self.follow_zone_change()
             here = self.game_location[0] if self.game_location else "?"
             self.link_label.setText(f"●  Connecté au jeu · {here}")
             self._set_pill(True)
@@ -2681,13 +2980,14 @@ class RouteEditor(QMainWindow):
         self.soldiers = self.link.soldiers() if here else []
         if here and (getattr(self, "_poll_count", 0) % 10 == 0 or not self._animal_managers):  # troupeaux relus toutes les 5 s
             self._animal_managers = self.link.animal_list(self.link.task_actors("AnimalManager"))
-        self.animals = self.link.animal_positions(self._animal_managers) if here else []
+        self.animals = self.link.animal_positions(self._animal_managers) + self.link.wolves() if here else []
         self.draw_animals()
         self.live_check_zone()
         if here and (not self.assignable or self._assignable_zone != self.game_location[0]):
             self.assignable = self.link.route_groups()
             self._assignable_zone = self.game_location[0]
             self.update_game_route_marks()
+            self.filter_game_routes()
         game_zone = self.game_location[0] if self.game_location else None
         if game_zone != getattr(self, "_npc_zone", None):
             self.npc_backup = {}  # le jeu a change de zone : ce ne sont plus les memes PNJ
@@ -2770,7 +3070,7 @@ class RouteEditor(QMainWindow):
             return
         target = min(soldier["point"], len(self.geom.routes[index].points) - 1)
         if self.game_pick != (index, target):
-            self.select_game_point(index, target)
+            self.select_game_point(index, target, user=False)
             self.point_title.setText(self.point_title.text().replace("Point ", "Soldat → point ", 1))
 
     # -------------------------------------------------- PNJ : attribution d'une route
@@ -2844,7 +3144,8 @@ class RouteEditor(QMainWindow):
         mine = self.route()
         if self.target_kind == "mine" and mine is not None:
             return None, mine
-        return self.selected_game_route(), None
+        row = self.assign_game_row
+        return (self.geom.routes[row] if self.geom and row is not None and 0 <= row < len(self.geom.routes) else None), None
 
     def update_assign(self):
         npc = next((n for n in self.soldiers if n["actor"] == self.npc_combo.currentData()), None)
@@ -3198,10 +3499,45 @@ class RouteEditor(QMainWindow):
                                           "Rétablir les routes du jeu modifiées avant de quitter ?")
             if answer == QMessageBox.StandardButton.Yes:
                 self.restore_game_routes(current_only=False)
+        self.view3d.release_gl(final=True)  # textures liberees tant que la vue existe
         super().closeEvent(event)
 
 
+CRASH_LOG = os.path.join(DATA_DIR, "logs", "editeur.log")
+
+
+def install_crash_log():
+    """Journal qui survit a un plantage : piles de tous les fils en cas de
+    plantage natif (Qt, OpenGL...), erreurs Python non rattrapees,
+    avertissements de Qt. Garde les 2 derniers lancements."""
+    import datetime
+    import faulthandler
+    import traceback
+    from PySide6.QtCore import qInstallMessageHandler
+    os.makedirs(os.path.dirname(CRASH_LOG), exist_ok=True)
+    try:
+        if os.path.exists(CRASH_LOG):
+            os.replace(CRASH_LOG, CRASH_LOG + ".precedent")
+    except OSError:
+        pass
+    log = open(CRASH_LOG, "a", encoding="utf-8", buffering=1)
+    log.write(f"=== lancement {datetime.datetime.now():%Y-%m-%d %H:%M:%S}\n")
+    faulthandler.enable(file=log, all_threads=True)
+
+    def excepthook(kind, value, tb):
+        log.write(f"--- erreur Python {datetime.datetime.now():%H:%M:%S}\n" + "".join(traceback.format_exception(kind, value, tb)))
+        sys.__excepthook__(kind, value, tb)
+    sys.excepthook = excepthook
+    threading.excepthook = lambda args: excepthook(args.exc_type, args.exc_value, args.exc_traceback)
+
+    def qt_message(mode, context, message):
+        log.write(f"--- Qt {datetime.datetime.now():%H:%M:%S} {message}\n")
+    qInstallMessageHandler(qt_message)
+    return log
+
+
 def main():
+    install_crash_log()
     app = QApplication.instance() or QApplication(sys.argv)
     # boutons standard de Qt en francais (Oui / Non, OK / Annuler...)
     from PySide6.QtCore import QLibraryInfo, QLocale, QTranslator
@@ -3212,4 +3548,10 @@ def main():
     app.setStyleSheet(STYLE)
     window = RouteEditor()
     window.show()
-    return app.exec()
+    code = app.exec()
+    try:
+        with open(CRASH_LOG, "a", encoding="utf-8") as log:
+            log.write("=== fermeture normale\n")
+    except OSError:
+        pass
+    return code
