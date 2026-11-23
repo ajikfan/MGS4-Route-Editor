@@ -11,6 +11,7 @@ Pas encore fait : murs et sol (geometrie compressee du .geom), vue 3D,
 injection des routes dans le jeu et attribution a un PNJ.
 Coordonnees en millimetres : X et Z au sol (Z vers le haut de la carte),
 Y = hauteur."""
+import gc
 import json
 import math
 from types import SimpleNamespace
@@ -38,7 +39,7 @@ from mgs4routes.i18n import tr
 from mgs4routes import geom as geomlib
 from mgs4routes.game import NAV_TYPE, GameLink
 from mgs4routes.collision import MeshCache, clip_below
-from mgs4routes.nav import CellCache, NavIndex
+from mgs4routes.nav import CellCache, NavIndex, start_point
 from mgs4routes.scene import SceneBuilder
 from mgs4routes.textures import TextureLibrary
 from mgs4routes.view3d import View3D
@@ -1602,7 +1603,7 @@ class RouteEditor(QMainWindow):
         self.provided_current = -1
         self.current = 0 if self.routes else -1
         self.selected = -1
-        self.scene.clear()
+        self.clear_scene()
         self._soldier_items = []
         self._animal_items = []
         self._soldier_ring = None
@@ -1624,6 +1625,25 @@ class RouteEditor(QMainWindow):
         self.redraw_routes()
         self.fit_view()
         self.update_status()
+
+    def clear_scene(self):
+        """Vide la carte SANS scene.clear() : clear() detruit cote C++ des elements
+        dont Python garde l'enveloppe (PointItem, GameHandle sont des sous-classes
+        Python ; les QGraphicsItem ne sont pas des QObject, PySide n'est pas
+        prevenu) ; le ramasse-miettes pouvait les detruire une 2e fois plus tard,
+        a un moment quelconque : plantages « sans log » (violation d'acces au
+        changement de zone, 2026-11-23). Ici chaque element de premier niveau est
+        retire de la scene (Python en redevient proprietaire) puis libere une
+        seule fois, avec ses enfants."""
+        for name in ("_soldier_items", "_animal_items", "_route_items", "_provided_items", "_game_route_items"):
+            setattr(self, name, [])
+        for name in ("_soldier_ring", "_handle", "_highlight", "_pick_item", "_snake_item"):
+            setattr(self, name, None)
+        self._game_items = {key: [] for key in self._game_items}
+        for item in self.scene.items():
+            if item.parentItem() is None:
+                self.scene.removeItem(item)
+        gc.collect()
 
     def draw_game_layers(self):
         g = self.geom
@@ -3519,10 +3539,19 @@ class RouteEditor(QMainWindow):
                 return
             self.npc_backup[npc["actor"]] = (npc["class"], saved)
         group, index = self.assignable[ident]
-        if self.link.assign_route(npc["actor"], group, index, ident):
+        # depart : point le plus proche joignable en ligne droite (un PNJ ne
+        # contourne pas les murs pour rejoindre le point vise)
+        start, direct = 0, True
+        location = self.link.route_location(ident)
+        data = self.link.read_points(*location) if location else None
+        if data:
+            points = [struct.unpack_from("<3f", data, 0x30 * k) for k in range(len(data) // 0x30)]
+            start, direct = start_point(self.cells, npc["position"], points)
+        if self.link.assign_route(npc["actor"], group, index, ident, start):
             self.live_message("")
             carried = tr("editor.assign_route.portee_par_a0_06x", a0=ident) if mine is not None or (route and route.ident != ident) else ""
-            self.assign_info.setText(tr("editor.assign_route.a0_a1_est_donnee_le", a0=label, a1=carried))
+            key = "editor.assign_route.a0_a1_est_donnee_le" if direct else "editor.assign_route.depart_sans_trajet_direct"
+            self.assign_info.setText(tr(key, a0=label, a1=carried, a2=start + 1))
             self.update_inject_button()
         else:
             self.live_message(tr("editor.write_game_bytes.ecriture_refusee_par_le_jeu"))

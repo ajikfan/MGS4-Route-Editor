@@ -1,6 +1,6 @@
 {
  "editor.action_label.a0_0x_a1_x_inconnue": "{a0} (0x{a1:X}) · unknown",
- "editor.assign_route.a0_a1_est_donnee_le": "{a0}{a1} is assigned: the NPC takes it right away, from point 1.",
+ "editor.assign_route.a0_a1_est_donnee_le": "{a0}{a1} is assigned: the NPC takes it right away, from point {a2} (the nearest one reachable in a straight line).",
  "editor.assign_route.animations_manquantes": "Missing animations",
  "editor.assign_route.ce_pnj_n_a_pas": "This NPC has no route record (vehicle, fixed post…). Writing one has never been tried: the game may ignore it or crash. Continue?",
  "editor.assign_route.ce_pnj_n_existe_plus": "This NPC no longer exists: nothing was written.",
@@ -319,5 +319,6 @@
  "view3d.init.zqsd_se_deplacer_clic_molette": "WASD (ZQSD on AZERTY): move · middle or held left button + mouse: look around · right button: up · held left button: down · Q (A on AZERTY) or Shift: fast · Ctrl: slow · wheel: zoom · click: choose a point · double click: top view",
  "view3d.initializegl.vue_3d_shaders_refuses_par": "3D view: shaders refused by the graphics card (",
  "view3d.initializegl.vue_3d_textures_refusees_par": "3D view: textures refused by the graphics card (",
- "view3d.mousereleaseevent.aucune_surface_sous_la_souris": "No surface under the mouse: point not placed."
+ "view3d.mousereleaseevent.aucune_surface_sous_la_souris": "No surface under the mouse: point not placed.",
+ "editor.assign_route.depart_sans_trajet_direct": "{a0}{a1} is assigned, starting from point {a2}, the nearest one: no point is reachable in a straight line, the NPC may get stuck against an obstacle."
 }

@@ -50,6 +50,8 @@ TRANSFORM_YAW_SIN, TRANSFORM_YAW_COS = 0x260, 0x268
 # suivie (+0x80, identifiant en +0), point en cours (+0x60, mot)
 SOLDIER_POSITION, SOLDIER_FOLLOWER = 0x2D0, 0x42D8
 FOLLOWER_ROUTE, FOLLOWER_POINT, FOLLOWER_TARGET = 0x80, 0x60, 0x30
+FOLLOWER_LOOK, FOLLOWER_FLAGS, FOLLOWER_ACTION = 0x40, 0x54, 0x58  # copies du point vise
+FOLLOWER_IDENT, FOLLOWER_IDENT_COPY = 0x74, 0x90  # identifiant ; +0x90 identifiant puis numero du point
 ROUTE_POINT_SIZE = 0x30  # position (3 flottants) en +0
 # Fiche de route d'un soldat (+0x4640) : 3 cases de 0x14 octets (0, famille,
 # groupe, index de la route dans le groupe, point) ; case 1 = route suivie,
@@ -337,11 +339,19 @@ class GameLink:
         except (OSError, AttributeError):
             return None
 
-    def assign_route(self, actor: int, group: int, index: int, ident: int | None = None) -> bool:
+    def assign_route(self, actor: int, group: int, index: int, ident: int | None = None, start: int = 0) -> bool:
         """Route suivie et route de rechange = (groupe, index) ; groupe de l'unite
         aligne. Si `ident` est donne, le suivi de route de l'acteur (+0x42D8) passe
-        aussitot sur cette route, au point 1 (sinon le PNJ peut finir sa route en
-        cours avant de changer). A n'appeler que pour un acteur verifie (classe)."""
+        aussitot sur cette route, au point `start` (sinon le PNJ peut finir sa
+        route en cours avant de changer). A n'appeler que pour un acteur verifie
+        (classe).
+
+        Le suivi est une copie du point vise (releve du 2026-11-23, s04a40l, Meryl
+        et soldat PMC en route) : +0x30 position, +0x40 regard, +0x54 drapeaux,
+        +0x58 action, allure, attente, angle, +0x60 numero du point, +0x74 et +0x90
+        identifiant de la route, +0x80 entree, +0x94 numero du point. Tout est
+        recopie : avant, l'action de l'ancienne route restait (soldat bloque sur
+        l'action 6 de sa route Gekko)."""
         slot = struct.pack("<IIIiI", 0, ROUTE_KIND, group, index, 0)
         try:
             self.proc.write_bytes(actor + RECORD, slot)
@@ -353,10 +363,16 @@ class GameLink:
             entry = self.route_entry(ident) if ident is not None else None
             location = self.route_location(ident) if ident is not None else None
             if follower and entry and location:
-                first = self.proc.read_bytes(location[0], 12)
-                self.proc.write_bytes(follower + FOLLOWER_TARGET, first)
-                self.proc.write_bytes(follower + FOLLOWER_POINT, struct.pack("<h", 0))
+                start = start if 0 <= start < location[1] else 0
+                point = self.proc.read_bytes(location[0] + 0x30 * start, 0x30)
                 self.proc.write_bytes(follower + FOLLOWER_ROUTE, struct.pack("<Q", entry[0]))
+                self.proc.write_bytes(follower + FOLLOWER_IDENT, struct.pack("<I", ident))
+                self.proc.write_bytes(follower + FOLLOWER_IDENT_COPY, struct.pack("<II", ident, start))
+                self.proc.write_bytes(follower + FOLLOWER_LOOK, point[0x10:0x1C])
+                self.proc.write_bytes(follower + FOLLOWER_FLAGS, point[0x0C:0x10])
+                self.proc.write_bytes(follower + FOLLOWER_ACTION, point[0x1C:0x24])
+                self.proc.write_bytes(follower + FOLLOWER_POINT, struct.pack("<H", start))
+                self.proc.write_bytes(follower + FOLLOWER_TARGET, point[0:12])
             return True
         except OSError:
             return False

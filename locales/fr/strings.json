@@ -1,6 +1,6 @@
 {
  "editor.action_label.a0_0x_a1_x_inconnue": "{a0} (0x{a1:X}) · inconnue",
- "editor.assign_route.a0_a1_est_donnee_le": "{a0}{a1} est donnée : le PNJ la prend tout de suite, au point 1.",
+ "editor.assign_route.a0_a1_est_donnee_le": "{a0}{a1} est donnée : le PNJ la prend tout de suite, au point {a2} (le plus proche joignable en ligne droite).",
  "editor.assign_route.animations_manquantes": "Animations manquantes",
  "editor.assign_route.ce_pnj_n_a_pas": "Ce PNJ n'a pas de fiche de route (véhicule, poste fixe…). Lui en écrire une n'a jamais été essayé : le jeu pourrait l'ignorer ou planter. Continuer ?",
  "editor.assign_route.ce_pnj_n_existe_plus": "Ce PNJ n'existe plus : rien n'est écrit.",
@@ -319,5 +319,6 @@
  "view3d.init.zqsd_se_deplacer_clic_molette": "ZQSD : se déplacer · clic molette ou gauche maintenu + souris : regarder · clic droit : monter · clic gauche maintenu : descendre · A ou Maj : vite · Ctrl : lent · molette : zoom · clic : choisir un point · double-clic : vue de dessus",
  "view3d.initializegl.vue_3d_shaders_refuses_par": "Vue 3D : shaders refusés par la carte graphique (",
  "view3d.initializegl.vue_3d_textures_refusees_par": "Vue 3D : textures refusées par la carte graphique (",
- "view3d.mousereleaseevent.aucune_surface_sous_la_souris": "Aucune surface sous la souris : point non posé."
+ "view3d.mousereleaseevent.aucune_surface_sous_la_souris": "Aucune surface sous la souris : point non posé.",
+ "editor.assign_route.depart_sans_trajet_direct": "{a0}{a1} est donnée, départ au point {a2}, le plus proche : aucun point n'est joignable en ligne droite, le PNJ risque de buter contre un obstacle."
 }

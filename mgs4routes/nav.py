@@ -24,6 +24,7 @@ chacune a la hauteur de son sol (pied le plus bas de ses passages).
 walls() ci-dessous (balayage des segments) ne sert plus qu'a l'index des
 blocs (etendue de chaque bloc)."""
 import json
+import math
 import os
 import struct
 
@@ -339,3 +340,65 @@ class NavIndex:
             if share >= minimum:
                 found.append((share, path))
         return [p for _s, p in sorted(found, reverse=True)]
+
+
+# -------------------------------------------------- trajet direct d'un PNJ
+# Un PNJ va en ligne droite vers le point vise, sans contourner (constate le
+# 2026-11-21 : soldat et Meryl coinces contre un mur en allant au point 1).
+DIRECT_MAX_CLIMB = 1500.0  # mm : au-dela, pas de trajet direct (autre niveau)
+# Murs pris en compte (releve s04a40l, 2026-11-23, 80 trajets reels de PNJ) :
+# - le sol des cellules peut etre note 70 cm SOUS les pieds des PNJ : fenetre
+#   de 1,2 m sous les pieds ;
+# - seuls les vrais murs (cell["walls"]) : les bords des cellules « obstacle »
+#   a faible hauteur libre sont traverses par les PNJ (espaces sous un objet) ;
+# - murs raccourcis de WALL_END_MARGIN a chaque bout : un PNJ frole le bout.
+DIRECT_BELOW, DIRECT_ABOVE = 1200.0, 400.0
+WALL_END_MARGIN = 250.0
+
+
+def _crosses(a, b, c, d) -> bool:
+    """Segments [a, b] et [c, d] (X, Z) se coupent (bords exclus)."""
+    def side(p, q, r):
+        return (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0])
+    d1, d2 = side(c, d, a), side(c, d, b)
+    d3, d4 = side(a, b, c), side(a, b, d)
+    return d1 * d2 < 0 and d3 * d4 < 0
+
+
+def direct_path_clear(cells: list[dict], start, end) -> bool:
+    """Le trajet en ligne droite de start a end (x, y, z en mm) ne traverse
+    aucun mur des cellules de navigation, a la hauteur des deux extremites, et
+    ne monte ni ne descend de plus de DIRECT_MAX_CLIMB."""
+    (ax, ay, az), (bx, by, bz) = start, end
+    if abs(by - ay) > DIRECT_MAX_CLIMB:
+        return False
+    low, high = min(ay, by) - DIRECT_BELOW, max(ay, by) + DIRECT_ABOVE
+    a, b = (ax, az), (bx, bz)
+    x0, x1, z0, z1 = min(ax, bx), max(ax, bx), min(az, bz), max(az, bz)
+    for cell in cells:
+        if not low <= cell["floor"] <= high:
+            continue
+        poly = cell["polygon"]
+        if (max(p[0] for p in poly) < x0 or min(p[0] for p in poly) > x1
+                or max(p[1] for p in poly) < z0 or min(p[1] for p in poly) > z1):
+            continue
+        for x1_, z1_, x2_, z2_ in (w[:4] for w in cell["walls"]):
+            length = math.hypot(x2_ - x1_, z2_ - z1_)
+            if length <= 2 * WALL_END_MARGIN:
+                continue
+            ux, uz = (x2_ - x1_) / length * WALL_END_MARGIN, (z2_ - z1_) / length * WALL_END_MARGIN
+            if _crosses(a, b, (x1_ + ux, z1_ + uz), (x2_ - ux, z2_ - uz)):
+                return False
+    return True
+
+
+def start_point(cells: list[dict], position, points: list) -> tuple[int, bool]:
+    """(numero du point de depart, trajet direct libre) : le point le plus proche
+    joignable en ligne droite, sinon le plus proche. points : [(x, y, z)]."""
+    order = sorted(range(len(points)), key=lambda k: (points[k][0] - position[0]) ** 2
+                   + (points[k][2] - position[2]) ** 2 + 4 * (points[k][1] - position[1]) ** 2)
+    if cells:
+        for k in order:
+            if direct_path_clear(cells, position, points[k]):
+                return k, True
+    return (order[0], False) if order else (0, False)
