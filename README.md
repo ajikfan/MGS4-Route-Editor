@@ -58,6 +58,23 @@ Le jeu ne documente pas les codes d'action et d'allure ni les drapeaux des
 points : l'éditeur affiche ceux qui sont connus et marque les autres comme
 hypothèses, à renommer au fil des essais.
 
+## Comment un PNJ suit une route
+
+- **En ligne droite** : un PNJ va droit vers le point visé, sans contourner
+  les murs. À l'attribution, l'éditeur le fait donc partir du point le plus
+  proche qu'il peut rejoindre en ligne droite (d'après les murs de la
+  zone), et le message indique ce point ; une route très éloignée le fera
+  traverser la zone tout droit.
+- **Arrivée** : un point est atteint à environ un mètre à l'horizontale,
+  quelle que soit la hauteur. Deux points de niveaux différents trop
+  proches à l'horizontale sont validés sans changer de niveau.
+- **Changer de niveau** : pentes, rochers et marches jusqu'à environ 50 cm
+  passent tout seuls ; un soldat prend aussi une **échelle** tout seul
+  (un point en bas, le suivant en haut, sans code spécial). Meryl ne prend
+  pas les échelles (elle reste en bas). Une paroi sans échelle n'a pas pu
+  être franchie, même avec l'allure 17 des routes du jeu.
+- Une route ouverte (sans boucle) repart du dernier point vers le premier.
+
 ## Mises à jour et versions (développeurs)
 
 Comme le trainer : l'exe (`launcher.py`, `MGS4RouteEditor.spec`) ne contient

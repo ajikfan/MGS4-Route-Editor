@@ -56,6 +56,23 @@ The game does not document the action and gait codes or the point flags: the
 editor shows the known ones and marks the others as hypotheses, which you can
 rename as you test.
 
+## How an NPC follows a route
+
+- **In a straight line**: an NPC goes straight to the target point,
+  without going around walls. When assigning, the editor therefore starts
+  it from the nearest point it can reach in a straight line (from the
+  area's walls), and the message gives that point; a route far away will
+  make it cross the area straight ahead.
+- **Arrival**: a point is reached at about one meter horizontally,
+  whatever the height. Two points on different levels that are too close
+  horizontally are validated without changing level.
+- **Changing level**: slopes, rocks and steps up to about 50 cm pass on
+  their own; a soldier also takes a **ladder** on its own (one point at the
+  bottom, the next one at the top, no special code). Meryl does not take
+  ladders (she stays at the bottom). A wall without a ladder could not be
+  climbed, even with the game routes' gait 17.
+- An open route (no loop) goes back from the last point to the first one.
+
 ## Updates and releases (developers)
 
 Like the trainer: the exe (`launcher.py`, `MGS4RouteEditor.spec`) only contains
