@@ -1,4 +1,4 @@
-# MGS4 Route Editor — V1.0.0
+# MGS4 Route Editor — V1.0.1
 
 *[Version française](README.md)*
 
@@ -31,6 +31,12 @@ python route_editor.py
 
 Python 3.12, PySide6 and numpy. Updates are then done with `git pull`.
 
+## Documentation
+
+- [Editor guide](docs/en/guide.md): the window, 2D and 3D, creating a
+  route, giving it to an NPC, how it follows it, common problems
+- [What's new in each version](docs/en/whats-new.md)
+
 ## What the editor does
 
 - **Zone map**, read from the game files without starting the game: walkable
@@ -58,20 +64,10 @@ rename as you test.
 
 ## How an NPC follows a route
 
-- **In a straight line**: an NPC goes straight to the target point,
-  without going around walls. When assigning, the editor therefore starts
-  it from the nearest point it can reach in a straight line (from the
-  area's walls), and the message gives that point; a route far away will
-  make it cross the area straight ahead.
-- **Arrival**: a point is reached at about one meter horizontally,
-  whatever the height. Two points on different levels that are too close
-  horizontally are validated without changing level.
-- **Changing level**: slopes, rocks and steps up to about 50 cm pass on
-  their own; a soldier also takes a **ladder** on its own (one point at the
-  bottom, the next one at the top, no special code). Meryl does not take
-  ladders (she stays at the bottom). A wall without a ladder could not be
-  climbed, even with the game routes' gait 17.
-- An open route (no loop) goes back from the last point to the first one.
+An NPC goes **in a straight line** to each point, without going around
+walls, and a point is reached at about one meter horizontally, whatever the
+height. Soldiers take ladders on their own, Meryl does not. Details and tips
+in the [guide](docs/en/guide.md#how-an-npc-follows-a-route).
 
 ## Updates and releases (developers)
 

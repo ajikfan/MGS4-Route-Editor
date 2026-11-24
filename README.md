@@ -1,4 +1,4 @@
-# MGS4 Route Editor — V1.0.0
+# MGS4 Route Editor — V1.0.1
 
 *[English version](README.en.md)*
 
@@ -32,6 +32,12 @@ python route_editor.py
 
 Python 3.12, PySide6 et numpy. Les mises à jour se font alors par `git pull`.
 
+## Documentation
+
+- [Guide de l'éditeur](docs/guide.md) : la fenêtre, la 2D et la 3D, créer
+  une route, la donner à un PNJ, comment il la suit, problèmes courants
+- [Nouveautés par version](docs/nouveautes.md)
+
 ## Ce que fait l'éditeur
 
 - **Carte de la zone**, lue dans les fichiers du jeu sans le lancer : sol
@@ -60,20 +66,10 @@ hypothèses, à renommer au fil des essais.
 
 ## Comment un PNJ suit une route
 
-- **En ligne droite** : un PNJ va droit vers le point visé, sans contourner
-  les murs. À l'attribution, l'éditeur le fait donc partir du point le plus
-  proche qu'il peut rejoindre en ligne droite (d'après les murs de la
-  zone), et le message indique ce point ; une route très éloignée le fera
-  traverser la zone tout droit.
-- **Arrivée** : un point est atteint à environ un mètre à l'horizontale,
-  quelle que soit la hauteur. Deux points de niveaux différents trop
-  proches à l'horizontale sont validés sans changer de niveau.
-- **Changer de niveau** : pentes, rochers et marches jusqu'à environ 50 cm
-  passent tout seuls ; un soldat prend aussi une **échelle** tout seul
-  (un point en bas, le suivant en haut, sans code spécial). Meryl ne prend
-  pas les échelles (elle reste en bas). Une paroi sans échelle n'a pas pu
-  être franchie, même avec l'allure 17 des routes du jeu.
-- Une route ouverte (sans boucle) repart du dernier point vers le premier.
+Un PNJ va **en ligne droite** vers chaque point, sans contourner les murs,
+et un point est atteint à environ un mètre à l'horizontale, quelle que soit
+la hauteur. Les soldats prennent les échelles tout seuls, pas Meryl.
+Détails et conseils dans le [guide](docs/guide.md#comment-un-pnj-suit-une-route).
 
 ## Mises à jour et versions (développeurs)
 

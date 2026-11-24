@@ -80,7 +80,7 @@
      "x": 640,
      "y": 7800,
      "z": 14478,
-     "action": 10,
+     "action": 7,
      "move": 2,
      "wait": 500,
      "angle": 21845,
@@ -98,7 +98,7 @@
      "x": 640,
      "y": 7800,
      "z": 14478,
-     "action": 15,
+     "action": 2,
      "move": 2,
      "wait": 500,
      "angle": 21845,
@@ -116,9 +116,9 @@
      "x": 640,
      "y": 7800,
      "z": 14478,
-     "action": 11,
+     "action": 46,
      "move": 2,
-     "wait": 500,
+     "wait": 50,
      "angle": 21845,
      "look": [
       3420,
@@ -428,6 +428,121 @@
      "angle": 0,
      "look": null,
      "flags": 0,
+     "param": 0,
+     "param2": 0,
+     "param3": 0
+    }
+   ]
+  },
+  {
+   "name": "Route 2",
+   "color": "#4ea1ff",
+   "loop": false,
+   "points": [
+    {
+     "x": -230,
+     "y": -2812,
+     "z": 1213,
+     "action": 2,
+     "move": 4,
+     "wait": 0,
+     "angle": 40778,
+     "look": [
+      -230,
+      -2898,
+      1213
+     ],
+     "flags": 0,
+     "param": 0,
+     "param2": 0,
+     "param3": 0
+    },
+    {
+     "x": -2300,
+     "y": -2812,
+     "z": 1200,
+     "action": 2,
+     "move": 4,
+     "wait": 0,
+     "angle": 0,
+     "look": [
+      -2900,
+      -2842,
+      1200
+     ],
+     "flags": 65536,
+     "param": 0,
+     "param2": 0,
+     "param3": 0
+    },
+    {
+     "x": -4300,
+     "y": -200,
+     "z": 1200,
+     "action": 45,
+     "move": 17,
+     "wait": 0,
+     "angle": 0,
+     "look": [
+      -3700,
+      -2842,
+      1200
+     ],
+     "flags": 65536,
+     "param": 0,
+     "param2": 0,
+     "param3": 0
+    },
+    {
+     "x": -6000,
+     "y": -200,
+     "z": 1072,
+     "action": 2,
+     "move": 4,
+     "wait": 0,
+     "angle": 0,
+     "look": [
+      -5500,
+      -300,
+      1072
+     ],
+     "flags": 0,
+     "param": 0,
+     "param2": 0,
+     "param3": 0
+    },
+    {
+     "x": -4330,
+     "y": -200,
+     "z": 1215,
+     "action": 46,
+     "move": 4,
+     "wait": 0,
+     "angle": 0,
+     "look": [
+      -3700,
+      -2842,
+      1200
+     ],
+     "flags": 65536,
+     "param": 0,
+     "param2": 0,
+     "param3": 0
+    },
+    {
+     "x": -2300,
+     "y": -2812,
+     "z": 1200,
+     "action": 31,
+     "move": 17,
+     "wait": 0,
+     "angle": 0,
+     "look": [
+      -2900,
+      -1600,
+      -200
+     ],
+     "flags": 65536,
      "param": 0,
      "param2": 0,
      "param3": 0
